@@ -736,9 +736,14 @@ def calc_trigami_threshold(odds: float, total_budget: int) -> str:
     if total_budget <= 0:
         return "【エラー】総予算は1円以上の値を入力してください。"
 
-    # 払戻 = bet × odds > total_budget を満たす最小の100円単位賭金
-    min_bet_100 = math.ceil(total_budget / odds / 100) * 100
+    # トリガミ回避最小賭金: bet × odds > total_budget を満たす最小の100円単位
+    raw_min = total_budget / odds
+    min_bet_100 = math.ceil(raw_min / 100) * 100
     payout = min_bet_100 * odds
+    # ちょうど予算と同額になる場合（利益ゼロ）は100円繰り上げて確実にプラスにする
+    if payout <= total_budget:
+        min_bet_100 += 100
+        payout = min_bet_100 * odds
     profit = payout - total_budget
     budget_ratio = min_bet_100 / total_budget * 100
 
@@ -753,27 +758,32 @@ def calc_trigami_threshold(odds: float, total_budget: int) -> str:
         "  ▼ 計算結果",
         f"  トリガミ回避最小賭金: {min_bet_100:,} 円",
         f"  この賭金での払戻:     {payout:,.0f} 円",
-        f"  差し引き損益:        {profit:+,.0f} 円",
+        f"  差し引き純利益:       {profit:+,.0f} 円",
         f"  予算に対する割合:     {budget_ratio:.0f}%",
         "",
-        "  ▼ 判断ガイド（R7ルール適用）",
+        f"  ★ 【必須】この組み合わせへの賭金は必ず {min_bet_100:,}円 以上にすること。",
+        f"     {min_bet_100 - 100:,}円 以下で買うと当選してもトリガミ確定。",
+        f"     均一分配や他の買い目と合計して予算内に収めるとき、",
+        f"     この組み合わせだけは {min_bet_100:,}円 を死守すること（R7）。",
+        "",
+        "  ▼ R7判断ガイド（死守 or 切る。中間なし）",
     ]
 
     if budget_ratio > 60:
         lines.append(
-            f"  ⚠ 予算の{budget_ratio:.0f}%をこの1点に集中させる必要があります。"
+            f"  ✕ 切り推奨: 予算の{budget_ratio:.0f}%を1点に集中しないと回避できないオッズ。"
         )
-        lines.append("    オッズが低すぎます。R7に従い「切る」か「トリガミ承知で少額のみ」を検討してください。")
+        lines.append("    このオッズで買い続けると長期期待値がマイナス。R7に従い「切る」が正解。")
     elif budget_ratio > 40:
         lines.append(
-            f"  △ 予算の{budget_ratio:.0f}%（{min_bet_100}円）が必要です。"
+            f"  △ 要注意: 予算の{budget_ratio:.0f}%（{min_bet_100:,}円）が必要。"
         )
-        lines.append("    他の買い目とのバランスを確認してください。")
+        lines.append("    他の買い目を絞ってこの金額を確保できるか確認してから買うこと。")
     else:
         lines.append(
-            f"  ○ 予算の{budget_ratio:.0f}%（{min_bet_100}円）でトリガミを回避できます。"
+            f"  ○ 許容範囲: 予算の{budget_ratio:.0f}%（{min_bet_100:,}円）で回避可能。"
         )
-        lines.append("    合理的なライン内です。")
+        lines.append("    ただし最終買い目でこの金額を下回らないよう必ず確認すること。")
 
     lines.append("")
     return "\n".join(lines)
