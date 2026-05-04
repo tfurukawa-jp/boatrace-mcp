@@ -1,0 +1,17 @@
+# 浜名湖競艇場ルール
+venue_id: 6
+venue_name: 浜名湖
+water_type: "要確認"    # freshwater / seawater / brackish / river
+course_length: 0         # 要確認（メートル）
+stable_board_used: false # 要確認
+night_race: false        # 要確認
+region: "要確認"
+
+characteristics:
+  - "（未記入）"
+
+cautions:
+  - "（未記入）"
+
+recommended_strategy:
+  - "（未記入）"

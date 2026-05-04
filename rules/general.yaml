@@ -1,0 +1,59 @@
+# ジェネラルルール（全会場・全条件共通）
+# R1〜R14：古川尚史さんが実戦で蓄積したナレッジ
+
+rules:
+  - id: R1
+    text: "1200m＋安定板は「イン有利」かつ「2-3着は荒れる」と二重解釈する"
+    tags: [course_length, stable_board, inner_advantage, scatter]
+
+  - id: R2
+    text: "1着固定する場合、2着・3着は機力＋展示STで4〜5艇まで広げる"
+    tags: [box_bet, motor, exhibition_st]
+
+  - id: R3
+    text: "「展示ST上位」と「当地3連率上位」のクロス集合を必ず軸候補に"
+    tags: [exhibition_st, local_3rate, axis_selection]
+
+  - id: R4
+    text: "「結論先行で条件を整合させていないか」を最後に必ず自問する"
+    tags: [meta, self_check]
+
+  - id: R5
+    text: "期別コース別2連率と当地勝率の乖離をチェックし、乖離が大きければ期別を優先する"
+    tags: [period_stats, local_winrate, course_stats]
+
+  - id: R6
+    text: "6コース選手は1着率と3着率の内訳を確認。3着型なら3着付け限定で使う"
+    tags: [course6, place_type]
+
+  - id: R7
+    text: "市場本命（オッズ最低の組み合わせ）はトリガミ回避ライン死守 or 切る。中間なし"
+    tags: [odds, trigami, favorite]
+
+  - id: R8
+    text: "自分で作ったルール（R1〜R14および会場別・条件別ルール）を毎回チェックする"
+    tags: [meta, checklist]
+
+  - id: R9
+    text: "ボート2連率・3連率は単独で見ず、出走者中の相対順位を必ず確認する"
+    tags: [boat, relative_ranking]
+
+  - id: R10
+    text: "3コース選手は「1着率主体か3着率主体か」をバー視認で必ず確認する"
+    tags: [course3, place_type]
+
+  - id: R11
+    text: "モーター2連率0.00%は致命的サイン。1着評価は大幅減点する"
+    tags: [motor, fatal_sign]
+
+  - id: R12
+    text: "過去成績が悪い選手でも、展示タイム・体重・チルトのいずれかが好材料なら3着付けで100円は残す"
+    tags: [exhibition_time, weight, tilt, third_place]
+
+  - id: R13
+    text: "6艇編成をA級と切る選手だけで判断せず、展示で何かが光った選手を必ず1〜2人3着候補にいれる"
+    tags: [class, exhibition, third_place]
+
+  - id: R14
+    text: "オッズ20倍超の中穴で「過去データ最悪・展示は好調」のパターンはハイリスクハイリターンの妙味枠として少額残す"
+    tags: [middle_odds, high_risk, exhibition]

@@ -1,0 +1,52 @@
+# 条件別ルール
+# 天候・風向・風速・波高・季節・時間帯による条件分岐ルール
+
+wind:
+  - condition: "向風6m以上"
+    rule: "1コース不利。ターン手前で失速しやすく、まくりが成立しやすい"
+    impact: high
+    tags: [wind, course1, mawashi]
+
+  - condition: "追風強風"
+    rule: "1コース有利方向だが、バックストレートでのスピード差が縮まり差しも来やすい"
+    impact: medium
+    tags: [wind, course1]
+
+  - condition: "横風（ホーム→バック方向）"
+    rule: "1コース艇がスタート時にコース取りが乱れやすい。ST差が拡大する"
+    impact: medium
+    tags: [wind, start]
+
+wave:
+  - condition: "波高3cm以上"
+    rule: "重い選手（体重55kg超）は不利。軽い選手が操艇しやすい"
+    impact: medium
+    tags: [wave, weight]
+
+  - condition: "波高10cm超"
+    rule: "アウトコース（4〜6コース）のまくりが成立しにくい。インが残りやすい"
+    impact: high
+    tags: [wave, outer_course]
+
+season:
+  - condition: "春（3〜5月）"
+    rule: "全般的にインの1着率が高い季節。当地1コース実績を重視する"
+    impact: medium
+    tags: [season, course1]
+
+  - condition: "夏（7〜8月）"
+    rule: "気温高騰によりモーター出力が落ちやすい。機力差が縮まる傾向"
+    impact: medium
+    tags: [season, motor]
+
+time_of_day:
+  - condition: "ナイター（トワイライト・夜間）"
+    rule: "照明環境でモーター音の聞こえ方が変わり、スタートタイミングが難しくなる選手もいる。展示STに注目"
+    impact: low
+    tags: [night, start]
+
+stable_board:
+  - condition: "安定板使用"
+    rule: "R1と連動。艇が安定する分インが有利になる一方、2-3着の荒れが増える。広めの買い目を検討する"
+    impact: high
+    tags: [stable_board, inner_advantage, scatter]
