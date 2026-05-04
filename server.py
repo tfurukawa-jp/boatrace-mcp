@@ -14,9 +14,14 @@ from datetime import date as date_module
 from typing import Optional
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 # ── FastMCPインスタンス ──────────────────────────────
-mcp = FastMCP("boatrace-mcp")
+# Renderでは外部ドメインからリクエストが来るためDNSリバインディング保護を無効化
+mcp = FastMCP(
+    "boatrace-mcp",
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
 
 # ── 定数 ──────────────────────────────────────────
 RULES_DIR = Path(__file__).parent / "rules"
@@ -733,7 +738,10 @@ def calc_trigami_threshold(odds: float, total_budget: int) -> str:
 # ── エントリーポイント ────────────────────────────────
 
 if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    app = mcp.streamable_http_app()
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    port_env = os.getenv("PORT")
+    if port_env:  # Render上ではPORTが自動設定される → HTTPモード
+        import uvicorn
+        app = mcp.streamable_http_app()
+        uvicorn.run(app, host="0.0.0.0", port=int(port_env))
+    else:  # ローカル（Claude Desktop）→ stdioモード
+        mcp.run()
