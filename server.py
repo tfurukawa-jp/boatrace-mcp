@@ -166,7 +166,7 @@ def get_race_card(venue: int, race_no: int, date: str = "today") -> str:
     return "\n".join(lines)
 
 
-# ── Tool 2: 直前情報 ──────────────────────────────────
+# ── Tool 2: 直前情報（boatrace.jp スクレイピング）────────
 
 @mcp.tool()
 def get_pre_race_info(venue: int, race_no: int, date: str = "today") -> str:
@@ -178,30 +178,88 @@ def get_pre_race_info(venue: int, race_no: int, date: str = "today") -> str:
     ※ 直前情報はレース開始の約40分前から取得可能です。
     """
     target_date = _resolve_date(date)
-
     url = (
-        "https://boatraceopenapi.github.io/previews/v2/today.json"
-        if date == "today"
-        else f"https://boatraceopenapi.github.io/previews/v2/{target_date}.json"
+        f"https://www.boatrace.jp/owpc/pc/race/beforeinfo"
+        f"?rno={race_no}&jcd={venue:02d}&hd={target_date}"
     )
 
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
-        data = resp.json()
     except Exception as e:
-        return f"【エラー】データ取得に失敗しました。\n詳細: {e}"
+        return f"【エラー】boatrace.jpへの接続に失敗しました。\n詳細: {e}"
 
-    race = _find_race(data.get("previews", []), venue, race_no)
-    if race is None:
+    soup = BeautifulSoup(resp.text, "html.parser")
+    tables = soup.find_all("table")
+
+    if len(tables) < 2:
         return (
             f"【データなし】{_venue_name(venue)} {race_no}R の直前情報が見つかりません。\n"
             "直前情報はレース開始約40分前から公開されます。"
         )
 
-    # 気象情報
-    weather_num = race.get("race_weather_number", 0)
-    wind_dir_num = race.get("race_wind_direction_number", 0)
+    # ── 気象情報（weather1 div）──
+    weather_div = soup.find("div", class_=lambda c: c and "weather1" in (c.split() if c else []))
+    weather_raw = weather_div.get_text(" ", strip=True) if weather_div else ""
+    temp_m   = re.search(r'気温\s*([\d.]+)', weather_raw)
+    wtemp_m  = re.search(r'水温\s*([\d.]+)', weather_raw)
+    wind_m   = re.search(r'風速\s*([\d.]+)', weather_raw)
+    wave_m   = re.search(r'波高\s*([\d.]+)', weather_raw)
+    weather_label = re.search(r'(晴|曇|雨|雪|霧)', weather_raw)
+
+    # ── スタート展示ST（Table2: is-typeN → 艇番マッピング）──
+    st_by_boat: dict[str, str] = {}
+    if len(tables) >= 3:
+        for row in tables[2].find_all("tr"):
+            div = row.find("div", class_="table1_boatImage1")
+            if not div:
+                continue
+            num_span  = div.find("span", class_=lambda c: c and "Number" in c)
+            time_span = div.find("span", class_=lambda c: c and "Time" in c)
+            if num_span and time_span:
+                # is-typeN の N が艇番
+                type_cls = next(
+                    (c for c in num_span.get("class", []) if c.startswith("is-type")), None
+                )
+                if type_cls:
+                    boat_num = type_cls.replace("is-type", "")
+                    st_by_boat[boat_num] = time_span.get_text(strip=True)
+
+    # ── 選手別データ（Table1: 艇ごとに4行ずつ）──
+    rows = tables[1].find_all("tr")
+    boats_data: dict[str, dict] = {}
+    i = 2  # 先頭2行はヘッダー
+    while i < len(rows):
+        cells = [td.get_text(" ", strip=True) for td in rows[i].find_all(["th", "td"])]
+        if cells and re.match(r"^[1-6]$", cells[0]):
+            frame    = cells[0]
+            name     = cells[2].replace("　", " ").strip() if len(cells) > 2 else "-"
+            weight   = cells[3] if len(cells) > 3 else "-"
+            exhibit_t = cells[4] if len(cells) > 4 else "-"
+            tilt     = cells[5] if len(cells) > 5 else "-"
+            # 3行目サブ行から体重調整を取得
+            w_adj = "0.0"
+            if i + 2 < len(rows):
+                sub = [td.get_text(" ", strip=True) for td in rows[i + 2].find_all(["th", "td"])]
+                if sub and sub[0] not in ["進入", "着順"]:
+                    w_adj = sub[0]
+            boats_data[frame] = {
+                "name": name,
+                "weight": weight,
+                "exhibit_t": exhibit_t,
+                "tilt": tilt,
+                "w_adj": w_adj,
+                "st": st_by_boat.get(frame, "-"),
+            }
+            i += 4
+        else:
+            i += 1
+
+    if not boats_data:
+        return (
+            f"【データなし】{_venue_name(venue)} {race_no}R の直前情報が見つかりません。\n"
+            "直前情報はレース開始約40分前から公開されます。"
+        )
 
     lines = [
         "=" * 50,
@@ -209,36 +267,22 @@ def get_pre_race_info(venue: int, race_no: int, date: str = "today") -> str:
         "=" * 50,
         "",
         "【気象情報】",
-        f"  天候: {WEATHER_MAP.get(weather_num, f'番号{weather_num}')}",
-        f"  風向: {WIND_DIR_MAP.get(wind_dir_num, f'番号{wind_dir_num}')}",
-        f"  風速: {race.get('race_wind', '-')} m/s",
-        f"  波高: {race.get('race_wave', '-')} cm",
-        f"  気温: {race.get('race_temperature', '-')} ℃",
-        f"  水温: {race.get('race_water_temperature', '-')} ℃",
+        f"  天候: {weather_label.group(1) if weather_label else '-'}",
+        f"  風速: {wind_m.group(1) + ' m/s' if wind_m else '-'}",
+        f"  波高: {wave_m.group(1) + ' cm' if wave_m else '-'}",
+        f"  気温: {temp_m.group(1) + ' ℃' if temp_m else '-'}",
+        f"  水温: {wtemp_m.group(1) + ' ℃' if wtemp_m else '-'}",
         "",
         "【選手別直前情報】",
-        f"  {'枠':>3}  {'展示タイム':>10}  {'展示ST':>8}  {'チルト':>6}  {'体重':>6}  {'体重調整':>6}",
-        "  " + "-" * 48,
+        f"  {'枠':>3}  {'選手名':<10}  {'展示T':>6}  {'展示ST':>7}  {'チルト':>6}  {'体重':>7}  {'調整':>5}",
+        "  " + "-" * 58,
     ]
 
-    # boats は dict {"1": {...}, "2": {...}, ...}
-    boats = race.get("boats", {})
-    for frame_str in sorted(boats.keys(), key=lambda x: int(x)):
-        b = boats[frame_str]
-        exhibit_t   = b.get("racer_exhibition_time", 0)
-        exhibit_st  = b.get("racer_start_timing")
-        tilt        = b.get("racer_tilt_adjustment", 0)
-        weight      = b.get("racer_weight", "-")
-        w_adj       = b.get("racer_weight_adjustment", 0)
-
-        exhibit_t_str  = f"{exhibit_t:.2f}" if isinstance(exhibit_t, (int, float)) and exhibit_t > 0 else "未公開"
-        exhibit_st_str = f"{exhibit_st:.2f}" if exhibit_st is not None else "未公開"
-        tilt_str       = f"{tilt:+.1f}" if isinstance(tilt, (int, float)) else str(tilt)
-        w_adj_str      = f"{w_adj:+.1f}" if w_adj else "  0.0"
-
+    for frame in sorted(boats_data.keys(), key=int):
+        b = boats_data[frame]
         lines.append(
-            f"  {frame_str:>3}号艇  {exhibit_t_str:>10}  {exhibit_st_str:>8}"
-            f"  {tilt_str:>6}  {weight:>6}kg  {w_adj_str:>6}kg"
+            f"  {frame}号艇  {b['name']:<10}  {b['exhibit_t']:>6}  {b['st']:>7}"
+            f"  {b['tilt']:>6}  {b['weight']:>7}  {b['w_adj']:>5}"
         )
 
     lines.append("")
