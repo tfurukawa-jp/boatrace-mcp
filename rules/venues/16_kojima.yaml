@@ -1,17 +1,23 @@
 # 児島競艇場ルール
 venue_id: 16
 venue_name: 児島
-water_type: "要確認"    # freshwater / seawater / brackish / river
-course_length: 0         # 要確認（メートル）
-stable_board_used: false # 要確認
-night_race: false        # 要確認
-region: "要確認"
+water_type: seawater         # 海水（瀬戸内海）
+course_length: 1800
+stable_board_used: false
+night_race: false
+region: 中国（岡山県）
 
 characteristics:
-  - "（未記入）"
+  - "瀬戸内海の比較的穏やかな水面。荒れにくい"
+  - "1800mと距離が長い。伸び足のある艇が有利になりやすい"
+  - "1コース1着率は全国平均程度（51〜53%）"
+  - "風の影響は中程度。強風日は注意が必要だが、瀬戸内海の特性上、極端に荒れにくい"
 
 cautions:
-  - "（未記入）"
+  - "1800mのため展示タイムの伸びを重視。距離分だけ機力の差が出やすい"
+  - "平均的な場のため特殊な狙い方は不要。標準的なルールを適用"
 
 recommended_strategy:
-  - "（未記入）"
+  - "1コース軸の本命〜中本命。展示タイム・展示ST上位を2-3着に組み合わせる"
+  - "R3（展示ST×当地3連率のクロス）を基本として適用"
+  - "1800mの伸び足重視。展示タイムが突出している艇を軸候補の上位に置く"

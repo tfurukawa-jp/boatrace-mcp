@@ -1,17 +1,23 @@
 # 福岡競艇場ルール
 venue_id: 22
 venue_name: 福岡
-water_type: "要確認"    # freshwater / seawater / brackish / river
-course_length: 0         # 要確認（メートル）
-stable_board_used: false # 要確認
-night_race: false        # 要確認
-region: "要確認"
+water_type: seawater         # 海水（博多湾）
+course_length: 1200
+stable_board_used: false
+night_race: true             # ナイター開催あり
+region: 九州（福岡県）
 
 characteristics:
-  - "（未記入）"
+  - "博多湾の内湾に位置し、水面が非常に穏やか。荒れにくい"
+  - "1コース1着率は全国平均程度〜やや高め（52〜54%）"
+  - "ナイター開催あり。夜間帯は特に水面が安定しやすくイン有利が強まる"
+  - "内湾のため風の影響が少ない。展示タイム・展示STが素直に本番に反映されやすい"
 
 cautions:
-  - "（未記入）"
+  - "ナイター帯はトリガミ確認（R7）が特に重要。穏やかな水面で1コース本命オッズが低くなりやすい"
+  - "荒れを期待した大穴狙いは基本的に不向きな場"
 
 recommended_strategy:
-  - "（未記入）"
+  - "1コース軸の本命〜中本命。展示ST・展示タイムが良ければ1着固定でよい"
+  - "ナイター帯：1コース固定で2-3着を3〜4艇に広げる。トリガミ回避ラインを必ず確認"
+  - "購入点数を絞り、1点あたりの賭け金を増やしてトリガミ回避を徹底する"

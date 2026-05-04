@@ -1,17 +1,24 @@
 # 唐津競艇場ルール
 venue_id: 23
 venue_name: 唐津
-water_type: "要確認"    # freshwater / seawater / brackish / river
-course_length: 0         # 要確認（メートル）
-stable_board_used: false # 要確認
-night_race: false        # 要確認
-region: "要確認"
+water_type: seawater         # 海水（唐津湾）
+course_length: 1800
+stable_board_used: false
+night_race: false
+region: 九州（佐賀県）
 
 characteristics:
-  - "（未記入）"
+  - "玄界灘に面した唐津湾の海水コース。外洋に近く風が強い日が多い"
+  - "1800mと距離が長い。伸び足のある艇が有利になりやすい"
+  - "1コース1着率は全国平均程度（50〜52%）。風が強い日は下がりやすい"
+  - "玄界灘からの強風が吹く日は水面が荒れ、外枠が台頭しやすくなる"
 
 cautions:
-  - "（未記入）"
+  - "玄界灘の風に注意。強風日はイン信頼度を大幅に下げる"
+  - "1800mのため展示タイムで伸び足の良い艇を優先評価する"
+  - "向風6m超の日は条件別ルールを必ず適用"
 
 recommended_strategy:
-  - "（未記入）"
+  - "穏やか日：1コース軸で展示タイム上位を2-3着に組み合わせる"
+  - "強風日：3〜4コースのまくりを軸候補に。外枠を軽視しない"
+  - "1800mの伸び足重視。展示タイムが突出している艇を軸候補の上位に置く"

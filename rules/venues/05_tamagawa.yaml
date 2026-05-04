@@ -1,17 +1,24 @@
 # 多摩川競艇場ルール
 venue_id: 5
 venue_name: 多摩川
-water_type: "要確認"    # freshwater / seawater / brackish / river
-course_length: 0         # 要確認（メートル）
-stable_board_used: false # 要確認
-night_race: false        # 要確認
-region: "要確認"
+water_type: freshwater       # 淡水
+course_length: 1500
+stable_board_used: false
+night_race: false
+region: 関東（東京都）
 
 characteristics:
-  - "（未記入）"
+  - "1500mと距離が長め。コーナーワークの技術差が出やすく、スピード型より安定型が有利"
+  - "水面は比較的穏やか。荒れにくく本命決着が多い"
+  - "1コース1着率は全国平均程度（50〜53%）。標準的なイン有利場"
+  - "距離が長い分、スタートで少し遅れても挽回できるケースがある"
+  - "東京都内のため、偏り風が少なく比較的条件が安定しやすい"
 
 cautions:
-  - "（未記入）"
+  - "1500mは他場の感覚より距離が長い。展示タイムと実際の機力の差が出やすい"
+  - "荒れにくい場のため、大穴を過度に期待しない。堅い配当で回収率を積み上げる場"
 
 recommended_strategy:
-  - "（未記入）"
+  - "1コース軸の本命〜中本命。2-3着は機力（モーター・ボート2連率）上位を優先"
+  - "R3（展示ST×当地3連率のクロス）を適用しやすい標準的な場"
+  - "穴狙いよりも高確率のラインを積み上げる方針が合う場"

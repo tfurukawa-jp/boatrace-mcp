@@ -1,17 +1,23 @@
 # 津競艇場ルール
 venue_id: 9
 venue_name: 津
-water_type: "要確認"    # freshwater / seawater / brackish / river
-course_length: 0         # 要確認（メートル）
-stable_board_used: false # 要確認
-night_race: false        # 要確認
-region: "要確認"
+water_type: seawater         # 海水
+course_length: 1200
+stable_board_used: false
+night_race: true             # ナイター開催あり
+region: 東海（三重県）
 
 characteristics:
-  - "（未記入）"
+  - "伊勢湾に面した海水コース。水面は比較的穏やかだが向風が強い日は波が立つ"
+  - "1コース1着率は全国平均程度（51〜53%）"
+  - "ナイター開催あり。夜間帯は水面が安定しやすい"
+  - "強い向風の日はインが失速しやすく、まくりが成立しやすくなる"
 
 cautions:
-  - "（未記入）"
+  - "伊勢湾からの風が強い日は水面が荒れやすい。風速・風向の確認を必ずする"
+  - "ナイター帯のトリガミに注意。1コース本命時はR7を適用する"
 
 recommended_strategy:
-  - "（未記入）"
+  - "微風・穏やか日：1コース軸の本命中心。展示ST上位を2-3着に組み合わせる"
+  - "向風6m超の日：イン信頼度を下げ、3〜4コースのまくりを軸候補に切り替える"
+  - "ナイター帯は1コース固定で2〜3着を広げる基本戦略を適用"

@@ -1,17 +1,24 @@
 # 浜名湖競艇場ルール
 venue_id: 6
 venue_name: 浜名湖
-water_type: "要確認"    # freshwater / seawater / brackish / river
-course_length: 0         # 要確認（メートル）
-stable_board_used: false # 要確認
-night_race: false        # 要確認
-region: "要確認"
+water_type: brackish         # 汽水（浜名湖。海とつながっている）
+course_length: 1800
+stable_board_used: false
+night_race: false
+region: 東海（静岡県）
 
 characteristics:
-  - "（未記入）"
+  - "汽水（海水と淡水が混じる）。潮の干満の影響が緩やかにある"
+  - "1800mと距離が長い。コース取りとペース配分が重要になる"
+  - "水面は比較的穏やか。荒れにくい標準的な場"
+  - "1コース1着率は全国平均程度（50〜53%）"
+  - "海風の影響が出る日があるが、全体的に風の影響は中程度"
 
 cautions:
-  - "（未記入）"
+  - "1800mのため展示タイムの解釈に注意。距離分だけ伸びが出る艇が有利になりやすい"
+  - "潮位変化は緩やかだが、満潮・干潮のタイミングで微妙に水面状況が変化する"
 
 recommended_strategy:
-  - "（未記入）"
+  - "1コース軸の標準的な組み立て。2-3着は3〜4艇に広げる"
+  - "距離が長いためモーターの伸び足（展示タイムの良さ）を重視する"
+  - "特別に荒れるイメージは少ない場。本命中心で堅めに組み立てる"

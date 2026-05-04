@@ -1,17 +1,23 @@
 # 若松競艇場ルール
 venue_id: 20
 venue_name: 若松
-water_type: "要確認"    # freshwater / seawater / brackish / river
-course_length: 0         # 要確認（メートル）
-stable_board_used: false # 要確認
-night_race: false        # 要確認
-region: "要確認"
+water_type: seawater         # 海水（洞海湾）
+course_length: 1200
+stable_board_used: false
+night_race: false
+region: 九州（福岡県）
 
 characteristics:
-  - "（未記入）"
+  - "洞海湾の内湾に位置し、水面は比較的穏やか"
+  - "1コース1着率は全国平均程度（51〜53%）"
+  - "内湾のため風の影響は中程度。大きく荒れることは少ない"
+  - "潮の干満の影響は緩やかにある"
 
 cautions:
-  - "（未記入）"
+  - "特別な特性が少ない標準的な場。基本ルール（R1〜R14）をそのまま適用"
+  - "風が強い日は内湾でも向風の影響が出ることがある。風速確認を忘れない"
 
 recommended_strategy:
-  - "（未記入）"
+  - "1コース軸の本命〜中本命。展示タイム・展示ST上位を2-3着に組み合わせる"
+  - "R3（展示ST×当地3連率のクロス）を基本として適用"
+  - "荒れを期待した大穴狙いよりも堅実な本命中心の組み立てが合う場"

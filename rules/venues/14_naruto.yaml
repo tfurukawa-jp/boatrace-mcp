@@ -1,17 +1,25 @@
 # 鳴門競艇場ルール
 venue_id: 14
 venue_name: 鳴門
-water_type: "要確認"    # freshwater / seawater / brackish / river
-course_length: 0         # 要確認（メートル）
-stable_board_used: false # 要確認
-night_race: false        # 要確認
-region: "要確認"
+water_type: seawater         # 海水
+course_length: 1800
+stable_board_used: false
+night_race: false
+region: 四国（徳島県）
 
 characteristics:
-  - "（未記入）"
+  - "鳴門海峡に近い海水コース。潮の干満の影響が出やすい"
+  - "1800mと距離が長い。伸び足のある艇が有利"
+  - "1コース1着率は全国平均程度（50〜52%）"
+  - "海風が強い日は水面が荒れやすく、外枠が台頭しやすくなる"
+  - "満潮時は水面が落ち着き、干潮時は流れが出やすい"
 
 cautions:
-  - "（未記入）"
+  - "潮位の状況を把握してから予想を組み立てる。干潮時は水面変化に注意"
+  - "1800mのため展示タイムで伸び足の良い艇を優先評価する"
+  - "強風日はイン信頼度を下げる。向風6m超は条件別ルールを適用"
 
 recommended_strategy:
-  - "（未記入）"
+  - "穏やかな日：1コース軸で展示タイム上位を2-3着に組み合わせる"
+  - "強風・干潮時：外枠（3〜4コース）のまくりを軸候補に。1コース信頼度を下げる"
+  - "1800mの伸び足重視。展示タイムが突出している艇を必ず評価する"
