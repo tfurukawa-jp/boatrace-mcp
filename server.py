@@ -634,6 +634,27 @@ def get_learning_rules(
     """
     result_sections = []
 
+    # ── 出力フォーマットガイド（最優先・常に先頭に返す）──
+    fmt_path = RULES_DIR / "output_format.yaml"
+    if fmt_path.exists():
+        with open(fmt_path, encoding="utf-8") as f:
+            fdata = yaml.safe_load(f)
+        fmt_block = [
+            "【⚠️ 絶対遵守：予想レポート出力フォーマット】",
+            "買い目を提示するとき・最終予想を出すときは、例外なく以下のMarkdown形式で出力せよ。",
+            "このフォーマットを使わない出力は不完全とみなす。",
+            "",
+        ]
+        for line in fdata.get("format", "").strip().splitlines():
+            fmt_block.append(line)
+        notes = fdata.get("notes", [])
+        if notes:
+            fmt_block.append("")
+            fmt_block.append("【出力ルール】")
+            for note in notes:
+                fmt_block.append(f"  - {note}")
+        result_sections.append("\n".join(fmt_block))
+
     # ── ジェネラルルール（常に返す）──
     general_path = RULES_DIR / "general.yaml"
     if general_path.exists():
@@ -641,28 +662,10 @@ def get_learning_rules(
             general = yaml.safe_load(f)
         rules = general.get("rules", [])
         if rules:
-            section = ["【ジェネラルルール（R1〜R14）】"]
+            section = ["【ジェネラルルール（R1〜R15）】"]
             for r in rules:
                 section.append(f"  {r['id']}: {r['text']}")
             result_sections.append("\n".join(section))
-
-    # ── 出力フォーマットガイド（常に返す）──
-    fmt_path = RULES_DIR / "output_format.yaml"
-    if fmt_path.exists():
-        with open(fmt_path, encoding="utf-8") as f:
-            fdata = yaml.safe_load(f)
-        fmt_block = ["\n【予想レポート出力フォーマット】"]
-        fmt_block.append("  最終的な買い目提示・予想アウトプット時は必ず以下のMarkdown構造で出力すること：")
-        fmt_block.append("")
-        for line in fdata.get("format", "").strip().splitlines():
-            fmt_block.append(f"  {line}")
-        notes = fdata.get("notes", [])
-        if notes:
-            fmt_block.append("")
-            fmt_block.append("  【注意事項】")
-            for note in notes:
-                fmt_block.append(f"    - {note}")
-        result_sections.append("\n".join(fmt_block))
 
     # ── 会場別ルール ──
     if venue is not None:
