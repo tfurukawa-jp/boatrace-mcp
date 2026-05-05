@@ -1512,54 +1512,35 @@ def generate_visual_report(prediction_json: str) -> str:
         )
 
 
+# ── レポートHTTPエンドポイント（FastMCP公式のcustom_routeを使用）──
+
+@mcp.custom_route("/reports/{report_id}", methods=["GET"])
+async def serve_report(request):
+    from starlette.responses import HTMLResponse
+    report_id = request.path_params["report_id"]
+    _cleanup_reports()
+    entry = _reports.get(report_id)
+    if not entry:
+        return HTMLResponse(
+            "<html><body style='background:#0d0d1a;color:#e8e8f0;"
+            "font-family:sans-serif;display:flex;align-items:center;"
+            "justify-content:center;height:100vh;margin:0'>"
+            "<div style='text-align:center'><p style='font-size:48px'>🚤</p>"
+            "<p style='font-size:20px;margin-top:16px'>レポートが見つかりません</p>"
+            "<p style='color:#8888aa;margin-top:8px'>期限切れまたは無効なURLです</p>"
+            "</div></body></html>",
+            status_code=404,
+        )
+    data, _ = entry
+    return HTMLResponse(_html_report(data))
+
+
 # ── エントリーポイント ────────────────────────────────
-
-class _ReportRouter:
-    """/reports/{id} だけ横取りし、それ以外はMCP ASGIアプリに素通しするミドルウェア。"""
-
-    def __init__(self, mcp_app):
-        self._mcp = mcp_app
-
-    async def __call__(self, scope, receive, send):
-        if scope.get("type") == "http" and scope.get("path", "").startswith("/reports/"):
-            report_id = scope["path"][len("/reports/"):]
-            _cleanup_reports()
-            entry = _reports.get(report_id)
-            if entry:
-                data, _ = entry
-                body = _html_report(data).encode("utf-8")
-                status, ctype = 200, b"text/html; charset=utf-8"
-            else:
-                body = (
-                    "<html><body style='background:#0d0d1a;color:#e8e8f0;"
-                    "font-family:sans-serif;display:flex;align-items:center;"
-                    "justify-content:center;height:100vh;margin:0'>"
-                    "<div style='text-align:center'><p style='font-size:48px'>🚤</p>"
-                    "<p style='font-size:20px;margin-top:16px'>レポートが見つかりません</p>"
-                    "<p style='color:#8888aa;margin-top:8px'>期限切れまたは無効なURLです</p>"
-                    "</div></body></html>"
-                ).encode("utf-8")
-                status, ctype = 404, b"text/html; charset=utf-8"
-
-            await send({
-                "type": "http.response.start",
-                "status": status,
-                "headers": [
-                    (b"content-type", ctype),
-                    (b"content-length", str(len(body)).encode()),
-                ],
-            })
-            await send({"type": "http.response.body", "body": body})
-            return
-
-        await self._mcp(scope, receive, send)
-
 
 if __name__ == "__main__":
     port_env = os.getenv("PORT")
     if port_env:  # Render上ではPORTが自動設定される → HTTPモード
         import uvicorn
-        mcp_asgi = mcp.streamable_http_app()
-        uvicorn.run(_ReportRouter(mcp_asgi), host="0.0.0.0", port=int(port_env))
+        uvicorn.run(mcp.streamable_http_app(), host="0.0.0.0", port=int(port_env))
     else:  # ローカル（Claude Desktop）→ stdioモード
         mcp.run()
