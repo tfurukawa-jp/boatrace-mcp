@@ -1,4 +1,5 @@
 .env
+google-sheets-key.json
 __pycache__/
 *.pyc
 *.pyo

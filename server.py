@@ -7,6 +7,7 @@ claude.aiモバイルアプリから呼び出し、レース分析に必要な�
 import os
 import re
 import math
+import json
 import yaml
 import requests
 from pathlib import Path
@@ -787,6 +788,449 @@ def calc_trigami_threshold(odds: float, total_budget: int) -> str:
 
     lines.append("")
     return "\n".join(lines)
+
+
+# ── Tool 8〜12: 収支記録 ──────────────────────────────
+
+@mcp.tool()
+def record_bets(
+    venue: int,
+    race_no: int,
+    date: str,
+    bets: str,
+    memo: str = "",
+) -> str:
+    """
+    買い目を一括記録する。
+    venue: 会場ID（1〜24）
+    race_no: レース番号（1〜12）
+    date: 日付（"today" または "YYYYMMDD"）
+    bets: JSON文字列 例: '[{"combination":"1-2-3","amount":600,"odds":5.1}, ...]'
+    memo: メモ（任意）
+    """
+    target_date = _resolve_date(date)
+    race_id = f"{target_date}_{venue:02d}_{race_no:02d}"
+
+    try:
+        bets_list = json.loads(bets)
+    except json.JSONDecodeError as e:
+        return f"【エラー】betsのJSON形式が正しくありません。\n詳細: {e}"
+
+    if not bets_list:
+        return "【エラー】買い目が1件もありません。"
+
+    try:
+        ws = _get_sheet()
+    except Exception as e:
+        return f"【エラー】Google Sheetsへの接続に失敗しました。\n詳細: {e}"
+
+    rows = [
+        [
+            race_id,
+            target_date,
+            _venue_name(venue),
+            race_no,
+            b.get("combination", ""),
+            b.get("amount", 0),
+            b.get("odds", 0),
+            "",   # result（未記録）
+            "",   # payout（未記録）
+            "",   # profit（未記録）
+            memo,
+        ]
+        for b in bets_list
+    ]
+
+    try:
+        ws.append_rows(rows, value_input_option="USER_ENTERED")
+    except Exception as e:
+        return f"【エラー】スプレッドシートへの書き込みに失敗しました。\n詳細: {e}"
+
+    total_amount = sum(b.get("amount", 0) for b in bets_list)
+    lines = [
+        "=" * 50,
+        f"  買い目記録完了：{_venue_name(venue)} {race_no}R",
+        "=" * 50,
+        f"  race_id: {race_id}",
+        f"  記録点数: {len(rows)}点",
+        "",
+        f"  {'組み合わせ':<10}  {'賭金':>6}  {'オッズ':>6}",
+        "  " + "-" * 30,
+    ]
+    for b in bets_list:
+        lines.append(f"  {b.get('combination',''):<10}  {b.get('amount',0):>5,}円  {b.get('odds',0):>5.1f}倍")
+    lines.append("")
+    lines.append(f"  合計賭け金: {total_amount:,}円")
+    lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def record_result(
+    venue: int,
+    race_no: int,
+    date: str,
+    result_combination: str,
+) -> str:
+    """
+    レース結果を記録し、的中・払戻・収支を自動計算してシートを更新する。
+    venue: 会場ID（1〜24）
+    race_no: レース番号（1〜12）
+    date: 日付（"today" または "YYYYMMDD"）
+    result_combination: 実際の3連単着順（例: "1-2-4"）
+    """
+    target_date = _resolve_date(date)
+    race_id = f"{target_date}_{venue:02d}_{race_no:02d}"
+
+    try:
+        ws = _get_sheet()
+        all_rows = ws.get_all_values()
+    except Exception as e:
+        return f"【エラー】Google Sheetsへの接続に失敗しました。\n詳細: {e}"
+
+    # ヘッダー: race_id(0) date(1) venue(2) race_no(3) combination(4)
+    #           amount(5) odds(6) result(7) payout(8) profit(9) memo(10)
+    hit = False
+    total_invested = 0
+    total_payout = 0
+    matched = 0
+
+    for i, row in enumerate(all_rows):
+        if i == 0 or not row or row[0] != race_id:
+            continue
+        try:
+            combination = row[4]
+            amount      = int(float(row[5])) if row[5] else 0
+            odds        = float(row[6]) if row[6] else 0.0
+        except (ValueError, IndexError):
+            continue
+
+        total_invested += amount
+        matched += 1
+
+        if combination == result_combination:
+            payout = round(amount * odds)
+            profit = payout - amount
+            hit = True
+            total_payout += payout
+        else:
+            payout = 0
+            profit = -amount
+
+        row_num = i + 1  # スプレッドシートは1始まり
+        try:
+            ws.update(f"H{row_num}:J{row_num}", [[result_combination, payout, profit]])
+        except Exception as e:
+            return f"【エラー】{row_num}行目の更新に失敗しました。\n詳細: {e}"
+
+    if matched == 0:
+        return (
+            f"【エラー】race_id「{race_id}」の記録が見つかりません。\n"
+            "先に record_bets で買い目を記録してください。"
+        )
+
+    net = total_payout - total_invested
+    roi = total_payout / total_invested * 100 if total_invested > 0 else 0
+
+    lines = [
+        "=" * 50,
+        f"  結果記録完了：{_venue_name(venue)} {race_no}R",
+        "=" * 50,
+        f"  結果: {result_combination}",
+        f"  {'【的中あり】' if hit else '【全外れ】'}",
+        "",
+        f"  総投資額: {total_invested:,}円",
+        f"  総払戻額: {total_payout:,}円",
+        f"  収支:     {net:+,}円",
+        f"  回収率:   {roi:.1f}%",
+        f"  更新行数: {matched}行",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_pnl_summary(period_type: str = "all", period_value: str = "") -> str:
+    """
+    収支サマリを返す。
+    period_type: "month"（月次）/ "year"（年次）/ "all"（全期間）
+    period_value: "2026-05"（monthの場合）/ "2026"（yearの場合）/ 空文字（allの場合）
+    """
+    try:
+        ws = _get_sheet()
+        all_rows = ws.get_all_values()
+    except Exception as e:
+        return f"【エラー】Google Sheetsへの接続に失敗しました。\n詳細: {e}"
+
+    # 結果が記録済みの行だけ対象（result列が空でない）
+    def _match_period(date_str: str) -> bool:
+        if period_type == "all":
+            return True
+        if period_type == "month":
+            # date_str は "20260505" 形式 → "2026-05" と比較
+            return f"{date_str[:4]}-{date_str[4:6]}" == period_value
+        if period_type == "year":
+            return date_str[:4] == period_value
+        return True
+
+    # race_id単位で集計
+    races: dict[str, dict] = {}
+    for i, row in enumerate(all_rows):
+        if i == 0 or not row or len(row) < 10:
+            continue
+        race_id     = row[0]
+        date_str    = row[1]
+        venue_name  = row[2]
+        result      = row[7]
+        if not result:  # 未記録のレースは除外
+            continue
+        if not _match_period(date_str):
+            continue
+
+        try:
+            amount = int(float(row[5])) if row[5] else 0
+            payout = int(float(row[8])) if row[8] else 0
+            profit = int(float(row[9])) if row[9] else 0
+        except ValueError:
+            continue
+
+        if race_id not in races:
+            races[race_id] = {"venue": venue_name, "invested": 0, "payout": 0, "hit": False}
+        races[race_id]["invested"] += amount
+        races[race_id]["payout"]   += payout
+        if payout > 0:
+            races[race_id]["hit"] = True
+
+    if not races:
+        return "【データなし】指定期間に記録済みのレースがありません。"
+
+    total_races    = len(races)
+    hit_races      = sum(1 for r in races.values() if r["hit"])
+    total_invested = sum(r["invested"] for r in races.values())
+    total_payout   = sum(r["payout"]   for r in races.values())
+    net            = total_payout - total_invested
+    roi            = total_payout / total_invested * 100 if total_invested > 0 else 0
+    hit_rate       = hit_races / total_races * 100 if total_races > 0 else 0
+
+    avg_invested   = total_invested / total_races if total_races > 0 else 0
+    avg_net        = net / total_races if total_races > 0 else 0
+
+    race_nets      = [r["payout"] - r["invested"] for r in races.values()]
+    best_payout    = max((r["payout"] for r in races.values()), default=0)
+
+    # 会場別集計
+    venue_stats: dict[str, dict] = {}
+    for r in races.values():
+        v = r["venue"]
+        if v not in venue_stats:
+            venue_stats[v] = {"races": 0, "invested": 0, "payout": 0}
+        venue_stats[v]["races"]    += 1
+        venue_stats[v]["invested"] += r["invested"]
+        venue_stats[v]["payout"]   += r["payout"]
+
+    period_label = {"all": "全期間", "month": period_value, "year": period_value}.get(period_type, "全期間")
+
+    lines = [
+        "=" * 50,
+        f"  収支サマリ（{period_label}）",
+        "=" * 50,
+        "",
+        "【全体成績】",
+        f"  投票レース数: {total_races}R",
+        f"  的中レース数: {hit_races}R  （的中率 {hit_rate:.1f}%）",
+        "",
+        "【収支】",
+        f"  総投資額:   {total_invested:,}円",
+        f"  総払戻額:   {total_payout:,}円",
+        f"  収支:       {net:+,}円",
+        f"  回収率:     {roi:.1f}%",
+        "",
+        "【平均】",
+        f"  1レース平均投資: {avg_invested:,.0f}円",
+        f"  1レース平均収支: {avg_net:+,.0f}円",
+        f"  最高払戻:        {best_payout:,}円",
+        "",
+        "【会場別】",
+    ]
+
+    for v, s in sorted(venue_stats.items(), key=lambda x: x[1]["payout"] - x[1]["invested"], reverse=True):
+        v_net = s["payout"] - s["invested"]
+        v_roi = s["payout"] / s["invested"] * 100 if s["invested"] > 0 else 0
+        lines.append(f"  {v}: {s['races']}R  {v_net:+,}円  回収率{v_roi:.0f}%")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_recent_bets(limit: int = 20) -> str:
+    """
+    直近N件の投票記録をシートから取得して表示する。
+    limit: 取得件数（デフォルト20、最大100）
+    """
+    limit = max(1, min(limit, 100))
+
+    try:
+        ws = _get_sheet()
+        all_rows = ws.get_all_values()
+    except Exception as e:
+        return f"【エラー】Google Sheetsへの接続に失敗しました。\n詳細: {e}"
+
+    data_rows = [r for r in all_rows[1:] if len(r) >= 6 and r[0]]
+    if not data_rows:
+        return "【データなし】まだ投票記録がありません。"
+
+    recent = data_rows[-limit:][::-1]  # 新しい順
+
+    lines = [
+        "=" * 54,
+        f"  直近{min(limit, len(recent))}件の投票記録",
+        "=" * 54,
+        f"  {'日付':<10}  {'会場':<6}  {'R':<3}  {'組合せ':<8}  {'賭金':>6}  {'オッズ':>6}  {'結果':<4}  {'収支':>8}",
+        "  " + "-" * 52,
+    ]
+
+    for row in recent:
+        d        = row[1] if len(row) > 1 else ""
+        venue    = row[2] if len(row) > 2 else ""
+        rno      = row[3] if len(row) > 3 else ""
+        combo    = row[4] if len(row) > 4 else ""
+        amount   = row[5] if len(row) > 5 else ""
+        odds_str = row[6] if len(row) > 6 else ""
+        result   = row[7] if len(row) > 7 else "-"
+        profit_s = row[9] if len(row) > 9 else ""
+
+        try:
+            profit = int(profit_s) if profit_s not in ("", "-") else None
+        except ValueError:
+            profit = None
+
+        profit_disp = f"{profit:+,}円" if profit is not None else "-"
+        lines.append(
+            f"  {d:<10}  {venue:<6}  {rno:<3}  {combo:<8}  {amount:>5}円  {odds_str:>5}倍  {result:<4}  {profit_disp:>8}"
+        )
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_losing_races(period: str = "month") -> str:
+    """
+    負けたレース（収支マイナス）を一覧表示する。振り返り・反省分析用。
+    period: "month"（今月）/ "year"（今年）/ "all"（全期間）
+    """
+    today = _resolve_date("today")
+    period_label_map = {"all": "全期間", "month": f"{today[:4]}-{today[4:6]}", "year": today[:4]}
+    period_label = period_label_map.get(period, "全期間")
+
+    def _match(date_str: str) -> bool:
+        if period == "all":
+            return True
+        if period == "month":
+            return f"{date_str[:4]}-{date_str[4:6]}" == period_label
+        if period == "year":
+            return date_str[:4] == period_label
+        return True
+
+    try:
+        ws = _get_sheet()
+        all_rows = ws.get_all_values()
+    except Exception as e:
+        return f"【エラー】Google Sheetsへの接続に失敗しました。\n詳細: {e}"
+
+    data_rows = [r for r in all_rows[1:] if len(r) >= 6 and r[0]]
+
+    races: dict[str, dict] = {}
+    for row in data_rows:
+        race_id = row[0]
+        if not race_id:
+            continue
+
+        d_str  = row[1] if len(row) > 1 else ""
+        venue  = row[2] if len(row) > 2 else ""
+        rno    = row[3] if len(row) > 3 else ""
+        result = row[7] if len(row) > 7 else ""
+
+        if not _match(d_str):
+            continue
+
+        try:
+            amount = int(float(row[5])) if len(row) > 5 and row[5] not in ("", "-") else 0
+            payout = int(float(row[8])) if len(row) > 8 and row[8] not in ("", "-") else 0
+        except ValueError:
+            amount, payout = 0, 0
+
+        if race_id not in races:
+            races[race_id] = {
+                "date": d_str, "venue": venue, "race_no": rno,
+                "invested": 0, "payout": 0, "result": "", "settled": False,
+            }
+        races[race_id]["invested"] += amount
+        races[race_id]["payout"]   += payout
+        if result:
+            races[race_id]["result"]  = result
+            races[race_id]["settled"] = True
+
+    losing = [
+        (rid, r) for rid, r in races.items()
+        if r["settled"] and (r["payout"] - r["invested"]) < 0
+    ]
+    losing.sort(key=lambda x: x[1]["date"], reverse=True)
+
+    if not losing:
+        return f"【{period_label}】負けたレースはありません。"
+
+    total_loss = sum(r["payout"] - r["invested"] for _, r in losing)
+
+    lines = [
+        "=" * 54,
+        f"  負けレース一覧（{period_label}）  計{len(losing)}R",
+        "=" * 54,
+        f"  {'日付':<10}  {'会場':<6}  {'R':<3}  {'着順':<8}  {'投資':>7}  {'収支':>8}",
+        "  " + "-" * 52,
+    ]
+
+    for _, r in losing:
+        net = r["payout"] - r["invested"]
+        lines.append(
+            f"  {r['date']:<10}  {r['venue']:<6}  {r['race_no']:<3}  {r['result']:<8}  {r['invested']:>6,}円  {net:+,}円"
+        )
+
+    lines += [
+        "",
+        f"  合計損失: {total_loss:+,}円",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+# ── Google Sheets 接続ヘルパー ────────────────────────
+
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1fTicLnOCDAYU0d9z6UN2futydjjRT7bIa2VI2_69VKs")
+_SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+
+def _get_sheet():
+    """bets ワークシートを返す。Render環境は環境変数JSON、ローカルはファイルパスで認証。"""
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+    except ImportError:
+        raise RuntimeError("gspread / google-auth が未インストールです。pip install gspread google-auth を実行してください。")
+
+    key_json = os.getenv("GOOGLE_SHEETS_KEY_JSON")
+    if key_json:
+        creds = Credentials.from_service_account_info(json.loads(key_json), scopes=_SHEETS_SCOPES)
+    else:
+        key_path = os.getenv(
+            "GOOGLE_SHEETS_KEY_PATH",
+            str(Path.home() / "boatrace-mcp/google-sheets-key.json"),
+        )
+        creds = Credentials.from_service_account_file(key_path, scopes=_SHEETS_SCOPES)
+
+    gc = gspread.authorize(creds)
+    return gc.open_by_key(SPREADSHEET_ID).worksheet("bets")
 
 
 # ── エントリーポイント ────────────────────────────────
