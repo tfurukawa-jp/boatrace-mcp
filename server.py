@@ -842,7 +842,7 @@ def record_bets(
     ]
 
     try:
-        ws.append_rows(rows, value_input_option="USER_ENTERED")
+        ws.append_rows(rows, value_input_option="RAW")
     except Exception as e:
         return f"【エラー】スプレッドシートへの書き込みに失敗しました。\n詳細: {e}"
 
