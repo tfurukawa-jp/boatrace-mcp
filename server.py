@@ -1473,24 +1473,43 @@ def generate_visual_report(prediction_json: str) -> str:
     except json.JSONDecodeError as e:
         return f"【エラー】JSONのパースに失敗しました: {e}"
 
-    _cleanup_reports()
-    report_id = secrets.token_urlsafe(16)
-    _reports[report_id] = (data, time.time() + _REPORT_TTL)
-
-    base_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
-    if not base_url:
-        port = os.getenv("PORT", "8000")
-        base_url = f"http://localhost:{port}"
-
-    url = f"{base_url}/reports/{report_id}"
     venue   = data.get("venue", "")
     race_no = data.get("race_no", "")
-    return (
-        f"✅ レポートを生成しました\n\n"
-        f"🚤 {venue} {race_no}R 分析レポート\n"
-        f"🔗 {url}\n\n"
-        f"⏱ このURLは24時間後に失効します"
-    )
+    html    = _html_report(data)
+
+    base_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+
+    if base_url:
+        # Renderのみ：メモリに保存してURLを返す
+        _cleanup_reports()
+        report_id = secrets.token_urlsafe(16)
+        _reports[report_id] = (data, time.time() + _REPORT_TTL)
+        url = f"{base_url}/reports/{report_id}"
+        return (
+            f"✅ レポートを生成しました\n\n"
+            f"🚤 {venue} {race_no}R 分析レポート\n"
+            f"🔗 {url}\n\n"
+            f"⏱ このURLは24時間後に失効します"
+        )
+    else:
+        # ローカルモード：HTMLファイルに保存してブラウザで開く
+        import tempfile, subprocess
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=".html",
+            prefix=f"boatrace_{venue}{race_no}R_",
+            delete=False,
+            mode="w",
+            encoding="utf-8",
+        )
+        tmp.write(html)
+        tmp.close()
+        subprocess.Popen(["open", tmp.name])
+        return (
+            f"✅ レポートをブラウザで開きました\n\n"
+            f"🚤 {venue} {race_no}R 分析レポート\n"
+            f"📄 {tmp.name}\n\n"
+            f"💡 スマホで見たい場合はclaude.ai（Web版）をご利用ください"
+        )
 
 
 # ── エントリーポイント ────────────────────────────────
