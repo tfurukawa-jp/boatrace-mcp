@@ -8,6 +8,8 @@ import os
 import re
 import math
 import json
+import time
+import secrets
 import yaml
 import requests
 from pathlib import Path
@@ -1254,13 +1256,272 @@ def _get_sheet():
     return gc.open_by_key(SPREADSHEET_ID).worksheet("bets")
 
 
+# ── レポートストレージ ────────────────────────────────
+
+_REPORT_TTL = 86400  # 24時間
+_reports: dict[str, tuple[dict, float]] = {}  # id -> (data, expiry)
+
+
+def _cleanup_reports() -> None:
+    now = time.time()
+    for rid in [k for k, (_, exp) in _reports.items() if now > exp]:
+        del _reports[rid]
+
+
+def _html_report(d: dict) -> str:
+    venue      = d.get("venue", "")
+    race_no    = d.get("race_no", "")
+    date_str   = d.get("date", "")
+    distance   = d.get("distance", "")
+    stable     = "あり" if d.get("stable_board") else "なし"
+    wind       = d.get("wind", "-")
+    wave       = d.get("wave", "-")
+    tod        = d.get("time_of_day", "")
+    formation  = d.get("formation", "")
+    conclusion = d.get("conclusion", "")
+    budget     = d.get("total_budget", 0)
+    bets       = d.get("bets", [])
+    racers     = d.get("racers", [])
+    rules      = d.get("rules_applied", [])
+    memo       = d.get("memo", "")
+    pnl        = d.get("pnl_summary", "")
+
+    total_amount = sum(b.get("amount", 0) for b in bets)
+
+    bet_rows = ""
+    for i, b in enumerate(bets, 1):
+        odds   = float(b.get("odds", 0))
+        amount = int(b.get("amount", 0))
+        net    = int(odds * amount) - amount
+        cls    = "gp" if net >= 0 else "rp"
+        sign   = "+" if net >= 0 else ""
+        bet_rows += (
+            f"<tr><td>{i}</td>"
+            f"<td class='cb'>{b.get('combination','')}</td>"
+            f"<td>{odds:.1f}倍</td>"
+            f"<td>{amount:,}円</td>"
+            f"<td class='{cls}'>{sign}{net:,}円</td></tr>"
+        )
+
+    label_color = {
+        "★本命軸":   "#ffd700",
+        "★2着候補":  "#00b4d8",
+        "★3着付け":  "#7b61ff",
+        "切り":      "#555",
+    }
+    racer_cards = ""
+    for r in racers:
+        lbl   = r.get("label", "")
+        color = label_color.get(lbl, "#888")
+        racer_cards += (
+            f"<div class='rc' style='border-left:3px solid {color}'>"
+            f"<div class='rh'>"
+            f"<span class='bn' style='background:{color}22;color:{color}'>{r.get('boat_no','')}号艇</span>"
+            f"<span class='rn'>{r.get('name','')}</span>"
+            f"<span class='rl' style='color:{color}'>{lbl}</span>"
+            f"</div>"
+            f"<p class='rr'>{r.get('reason','')}</p>"
+            f"</div>"
+        )
+
+    rules_html = "".join(f"<li>✅ {x}</li>" for x in rules)
+    pnl_html   = (
+        f"<section class='card'><h2>📊 直近収支</h2><p class='pt'>{pnl}</p></section>"
+        if pnl else ""
+    )
+    formation_html = (
+        f"<p class='fi'>編成: {formation}</p>" if formation else ""
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>🚤 {venue}{race_no}R 分析レポート</title>
+<style>
+:root{{--bg:#0d0d1a;--card:#1a1a2e;--c2:#16213e;--ac:#00b4d8;--gold:#ffd700;
+  --tx:#e8e8f0;--mt:#8888aa;--gn:#00e676;--rd:#ff5252;--br:#2a2a4a}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:var(--bg);color:var(--tx);
+  font-family:-apple-system,'Helvetica Neue',Helvetica,sans-serif;
+  font-size:16px;line-height:1.7;padding-bottom:48px}}
+header{{background:linear-gradient(135deg,#0a0a1e,#1a1a3e);
+  padding:28px 20px 22px;border-bottom:1px solid var(--br);text-align:center}}
+header .em{{font-size:44px;display:block;margin-bottom:8px}}
+header h1{{font-size:22px;font-weight:700;color:#fff;letter-spacing:.04em}}
+header .mt{{font-size:13px;color:var(--mt);margin-top:6px}}
+.card{{margin:14px 16px;background:var(--card);border-radius:12px;
+  padding:18px 16px;border:1px solid var(--br)}}
+.card h2{{font-size:15px;font-weight:600;color:var(--ac);
+  margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--br);letter-spacing:.04em}}
+.ig{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
+.ii{{background:var(--c2);border-radius:8px;padding:10px 12px}}
+.il{{font-size:11px;color:var(--mt);margin-bottom:2px}}
+.iv{{font-size:15px;font-weight:600}}
+.fi{{margin-top:12px;font-size:13px;color:var(--mt)}}
+.ct{{font-size:17px;font-weight:700;color:var(--gold);
+  background:rgba(255,215,0,.08);border-left:3px solid var(--gold);
+  padding:12px 14px;border-radius:0 8px 8px 0}}
+.tw{{overflow-x:auto;-webkit-overflow-scrolling:touch}}
+table{{width:100%;border-collapse:collapse;min-width:320px}}
+th{{background:var(--c2);font-size:12px;color:var(--mt);
+  padding:8px 10px;text-align:center;font-weight:500;border-bottom:1px solid var(--br)}}
+td{{padding:10px;text-align:center;border-bottom:1px solid var(--br);font-size:14px}}
+td.cb{{font-size:16px;font-weight:700;color:#fff;font-family:monospace;letter-spacing:.08em}}
+.gp{{color:var(--gn);font-weight:600}}
+.rp{{color:var(--rd);font-weight:600}}
+.bs{{display:flex;justify-content:space-between;margin-top:12px;
+  padding:10px 12px;background:var(--c2);border-radius:8px;font-size:13px}}
+.bs span{{color:var(--mt)}}
+.bs strong{{color:#fff}}
+.rc{{background:var(--c2);border-radius:10px;padding:12px 14px;
+  margin-bottom:10px;border:1px solid var(--br)}}
+.rh{{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}}
+.bn{{font-size:12px;font-weight:700;padding:3px 10px;border-radius:20px;white-space:nowrap}}
+.rn{{font-size:15px;font-weight:700;flex:1}}
+.rl{{font-size:12px;font-weight:600;white-space:nowrap}}
+.rr{{font-size:13px;color:var(--mt);line-height:1.6}}
+ul.rl2{{list-style:none;padding:0}}
+ul.rl2 li{{font-size:13px;padding:6px 0;border-bottom:1px solid var(--br);line-height:1.5}}
+ul.rl2 li:last-child{{border-bottom:none}}
+.memo{{font-size:14px;background:rgba(0,180,216,.06);
+  border-left:3px solid var(--ac);padding:12px 14px;
+  border-radius:0 8px 8px 0;line-height:1.7}}
+.pt{{font-size:16px}}
+footer{{text-align:center;font-size:11px;color:var(--mt);margin-top:24px;padding:0 20px}}
+@media(min-width:600px){{.card{{margin:14px auto;max-width:600px}}
+  header{{padding:36px 20px 28px}}}}
+</style>
+</head>
+<body>
+<header>
+  <span class="em">🚤</span>
+  <h1>{venue} {race_no}R 分析レポート</h1>
+  <div class="mt">{date_str}　{tod}</div>
+</header>
+
+<section class="card">
+  <h2>📋 レース情報</h2>
+  <div class="ig">
+    <div class="ii"><div class="il">距離</div><div class="iv">{distance}m</div></div>
+    <div class="ii"><div class="il">安定板</div><div class="iv">{stable}</div></div>
+    <div class="ii"><div class="il">風</div><div class="iv">{wind}</div></div>
+    <div class="ii"><div class="il">波</div><div class="iv">{wave}</div></div>
+  </div>
+  {formation_html}
+</section>
+
+<section class="card">
+  <h2>🎯 結論</h2>
+  <div class="ct">{conclusion}</div>
+</section>
+
+<section class="card">
+  <h2>🏆 推奨買い目（予算{budget:,}円）</h2>
+  <div class="tw">
+    <table>
+      <thead><tr><th>#</th><th>買い目</th><th>オッズ</th><th>賭金</th><th>想定収支</th></tr></thead>
+      <tbody>{bet_rows}</tbody>
+    </table>
+  </div>
+  <div class="bs"><div><span>合計投資 </span><strong>{total_amount:,}円</strong></div></div>
+</section>
+
+<section class="card">
+  <h2>🔍 各艇評価</h2>
+  {racer_cards}
+</section>
+
+<section class="card">
+  <h2>⚠️ 適用した学習ルール</h2>
+  <ul class="rl2">{rules_html}</ul>
+</section>
+
+<section class="card">
+  <h2>💡 戦略メモ</h2>
+  <div class="memo">{memo}</div>
+</section>
+
+{pnl_html}
+
+<footer>
+  <p>🚤 boatrace-mcp | Generated by Claude</p>
+  <p style="margin-top:4px">このレポートは24時間後に自動削除されます</p>
+</footer>
+</body>
+</html>"""
+
+
+@mcp.tool()
+def generate_visual_report(prediction_json: str) -> str:
+    """
+    予想分析データからHTMLレポートを生成し、閲覧URLを返す。
+    prediction_json: 以下キーを持つJSON文字列
+      venue(str), race_no(int/str), date(str), distance(int), stable_board(bool),
+      wind(str), wave(str), time_of_day(str), formation(str), conclusion(str),
+      total_budget(int),
+      bets: [{combination, odds, amount}],
+      racers: [{boat_no, name, label, reason}],
+        labelは「★本命軸」「★2着候補」「★3着付け」「切り」のいずれか
+      rules_applied: [str],
+      memo(str),
+      pnl_summary(str, optional)
+    """
+    try:
+        data = json.loads(prediction_json)
+    except json.JSONDecodeError as e:
+        return f"【エラー】JSONのパースに失敗しました: {e}"
+
+    _cleanup_reports()
+    report_id = secrets.token_urlsafe(16)
+    _reports[report_id] = (data, time.time() + _REPORT_TTL)
+
+    base_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not base_url:
+        port = os.getenv("PORT", "8000")
+        base_url = f"http://localhost:{port}"
+
+    url = f"{base_url}/reports/{report_id}"
+    venue   = data.get("venue", "")
+    race_no = data.get("race_no", "")
+    return (
+        f"✅ レポートを生成しました\n\n"
+        f"🚤 {venue} {race_no}R 分析レポート\n"
+        f"🔗 {url}\n\n"
+        f"⏱ このURLは24時間後に失効します"
+    )
+
+
 # ── エントリーポイント ────────────────────────────────
 
 if __name__ == "__main__":
     port_env = os.getenv("PORT")
     if port_env:  # Render上ではPORTが自動設定される → HTTPモード
+        from fastapi import FastAPI
+        from fastapi.responses import HTMLResponse
         import uvicorn
-        app = mcp.streamable_http_app()
-        uvicorn.run(app, host="0.0.0.0", port=int(port_env))
+
+        fastapi_app = FastAPI()
+
+        @fastapi_app.get("/reports/{report_id}", response_class=HTMLResponse)
+        def serve_report(report_id: str):
+            _cleanup_reports()
+            entry = _reports.get(report_id)
+            if not entry:
+                return HTMLResponse(
+                    "<html><body style='background:#0d0d1a;color:#e8e8f0;font-family:sans-serif;"
+                    "display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
+                    "<div style='text-align:center'><p style='font-size:48px'>🚤</p>"
+                    "<p style='font-size:20px;margin-top:16px'>レポートが見つかりません</p>"
+                    "<p style='color:#8888aa;margin-top:8px'>期限切れまたは無効なURLです</p></div></body></html>",
+                    status_code=404,
+                )
+            data, _ = entry
+            return HTMLResponse(_html_report(data))
+
+        mcp_asgi = mcp.streamable_http_app()
+        fastapi_app.mount("/", mcp_asgi)
+        uvicorn.run(fastapi_app, host="0.0.0.0", port=int(port_env))
     else:  # ローカル（Claude Desktop）→ stdioモード
         mcp.run()
