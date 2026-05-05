@@ -1338,71 +1338,78 @@ def _html_report(d: dict) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>🚤 {venue}{race_no}R 分析レポート</title>
+<title>{venue} {race_no}R 分析レポート</title>
 <style>
-:root{{--bg:#0d0d1a;--card:#1a1a2e;--c2:#16213e;--ac:#00b4d8;--gold:#ffd700;
-  --tx:#e8e8f0;--mt:#8888aa;--gn:#00e676;--rd:#ff5252;--br:#2a2a4a}}
+:root{{--bg:#f7f7f5;--white:#ffffff;--tx:#1a1a1a;--mt:#888;
+  --br:#e8e8e4;--ac:#1a1a1a;--gn:#2a7a4a;--rd:#c0392b;
+  --lc:#4a90d9}}
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:var(--bg);color:var(--tx);
   font-family:-apple-system,'Helvetica Neue',Helvetica,sans-serif;
-  font-size:16px;line-height:1.7;padding-bottom:48px}}
-header{{background:linear-gradient(135deg,#0a0a1e,#1a1a3e);
-  padding:28px 20px 22px;border-bottom:1px solid var(--br);text-align:center}}
-header .em{{font-size:44px;display:block;margin-bottom:8px}}
-header h1{{font-size:22px;font-weight:700;color:#fff;letter-spacing:.04em}}
-header .mt{{font-size:13px;color:var(--mt);margin-top:6px}}
-.card{{margin:14px 16px;background:var(--card);border-radius:12px;
-  padding:18px 16px;border:1px solid var(--br)}}
-.card h2{{font-size:15px;font-weight:600;color:var(--ac);
-  margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--br);letter-spacing:.04em}}
-.ig{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
-.ii{{background:var(--c2);border-radius:8px;padding:10px 12px}}
-.il{{font-size:11px;color:var(--mt);margin-bottom:2px}}
+  font-size:16px;line-height:1.75;padding-bottom:56px}}
+header{{background:var(--white);padding:32px 20px 24px;
+  border-bottom:1px solid var(--br);text-align:center}}
+header h1{{font-size:20px;font-weight:700;letter-spacing:.06em;color:var(--tx)}}
+header .sub{{font-size:13px;color:var(--mt);margin-top:6px;letter-spacing:.03em}}
+.card{{margin:12px 16px;background:var(--white);border-radius:8px;
+  padding:20px 18px;border:1px solid var(--br)}}
+.card h2{{font-size:11px;font-weight:700;color:var(--mt);letter-spacing:.12em;
+  text-transform:uppercase;margin-bottom:14px;padding-bottom:10px;
+  border-bottom:1px solid var(--br)}}
+.ig{{display:grid;grid-template-columns:1fr 1fr;gap:1px;
+  background:var(--br);border:1px solid var(--br);border-radius:6px;overflow:hidden}}
+.ii{{background:var(--white);padding:12px 14px}}
+.il{{font-size:11px;color:var(--mt);margin-bottom:2px;letter-spacing:.04em}}
 .iv{{font-size:15px;font-weight:600}}
 .fi{{margin-top:12px;font-size:13px;color:var(--mt)}}
-.ct{{font-size:17px;font-weight:700;color:var(--gold);
-  background:rgba(255,215,0,.08);border-left:3px solid var(--gold);
-  padding:12px 14px;border-radius:0 8px 8px 0}}
-.tw{{overflow-x:auto;-webkit-overflow-scrolling:touch}}
-table{{width:100%;border-collapse:collapse;min-width:320px}}
-th{{background:var(--c2);font-size:12px;color:var(--mt);
-  padding:8px 10px;text-align:center;font-weight:500;border-bottom:1px solid var(--br)}}
-td{{padding:10px;text-align:center;border-bottom:1px solid var(--br);font-size:14px}}
-td.cb{{font-size:16px;font-weight:700;color:#fff;font-family:monospace;letter-spacing:.08em}}
-.gp{{color:var(--gn);font-weight:600}}
-.rp{{color:var(--rd);font-weight:600}}
-.bs{{display:flex;justify-content:space-between;margin-top:12px;
-  padding:10px 12px;background:var(--c2);border-radius:8px;font-size:13px}}
-.bs span{{color:var(--mt)}}
-.bs strong{{color:#fff}}
-.rc{{background:var(--c2);border-radius:10px;padding:12px 14px;
-  margin-bottom:10px;border:1px solid var(--br)}}
-.rh{{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}}
-.bn{{font-size:12px;font-weight:700;padding:3px 10px;border-radius:20px;white-space:nowrap}}
+.ct{{font-size:16px;font-weight:700;line-height:1.6;
+  border-left:3px solid var(--tx);padding:10px 14px;
+  background:var(--bg);border-radius:0 6px 6px 0}}
+.tw{{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -2px}}
+table{{width:100%;border-collapse:collapse;min-width:300px}}
+th{{font-size:11px;color:var(--mt);font-weight:600;letter-spacing:.06em;
+  padding:8px 10px;text-align:center;border-bottom:2px solid var(--br)}}
+td{{padding:11px 10px;text-align:center;border-bottom:1px solid var(--br);font-size:14px}}
+tr:last-child td{{border-bottom:none}}
+td.cb{{font-size:15px;font-weight:700;font-family:monospace;letter-spacing:.1em}}
+.gp{{color:var(--gn);font-weight:700}}
+.rp{{color:var(--rd);font-weight:700}}
+.bs{{margin-top:14px;padding:10px 14px;background:var(--bg);
+  border-radius:6px;font-size:13px;color:var(--mt);display:flex;
+  justify-content:space-between;align-items:center}}
+.bs strong{{color:var(--tx);font-size:15px}}
+.rc{{padding:14px 0;border-bottom:1px solid var(--br)}}
+.rc:last-child{{border-bottom:none;padding-bottom:0}}
+.rh{{display:flex;align-items:baseline;gap:10px;margin-bottom:6px;flex-wrap:wrap}}
+.bn{{font-size:12px;font-weight:700;color:var(--mt);
+  border:1px solid var(--br);padding:2px 8px;border-radius:3px;white-space:nowrap}}
 .rn{{font-size:15px;font-weight:700;flex:1}}
-.rl{{font-size:12px;font-weight:600;white-space:nowrap}}
-.rr{{font-size:13px;color:var(--mt);line-height:1.6}}
+.rl{{font-size:12px;font-weight:600;color:var(--lc);white-space:nowrap}}
+.rl.cut{{color:var(--mt)}}
+.rr{{font-size:13px;color:var(--mt);line-height:1.65;padding-left:2px}}
 ul.rl2{{list-style:none;padding:0}}
-ul.rl2 li{{font-size:13px;padding:6px 0;border-bottom:1px solid var(--br);line-height:1.5}}
+ul.rl2 li{{font-size:13px;padding:7px 0;border-bottom:1px solid var(--br);
+  color:var(--tx);line-height:1.6}}
 ul.rl2 li:last-child{{border-bottom:none}}
-.memo{{font-size:14px;background:rgba(0,180,216,.06);
-  border-left:3px solid var(--ac);padding:12px 14px;
-  border-radius:0 8px 8px 0;line-height:1.7}}
-.pt{{font-size:16px}}
-footer{{text-align:center;font-size:11px;color:var(--mt);margin-top:24px;padding:0 20px}}
-@media(min-width:600px){{.card{{margin:14px auto;max-width:600px}}
-  header{{padding:36px 20px 28px}}}}
+.memo{{font-size:14px;border-left:2px solid var(--br);
+  padding:10px 14px;color:#444;line-height:1.75}}
+.pt{{font-size:15px}}
+footer{{text-align:center;font-size:11px;color:var(--mt);
+  margin-top:28px;padding:0 20px;letter-spacing:.04em}}
+@media(min-width:600px){{
+  .card{{margin:12px auto;max-width:580px}}
+  header{{padding:40px 20px 28px}}
+}}
 </style>
 </head>
 <body>
 <header>
-  <span class="em">🚤</span>
-  <h1>{venue} {race_no}R 分析レポート</h1>
-  <div class="mt">{date_str}　{tod}</div>
+  <h1>🚤 {venue} {race_no}R 分析レポート</h1>
+  <div class="sub">{date_str}　{tod}</div>
 </header>
 
 <section class="card">
-  <h2>📋 レース情報</h2>
+  <h2>Race Info</h2>
   <div class="ig">
     <div class="ii"><div class="il">距離</div><div class="iv">{distance}m</div></div>
     <div class="ii"><div class="il">安定板</div><div class="iv">{stable}</div></div>
@@ -1413,41 +1420,41 @@ footer{{text-align:center;font-size:11px;color:var(--mt);margin-top:24px;padding
 </section>
 
 <section class="card">
-  <h2>🎯 結論</h2>
+  <h2>Conclusion</h2>
   <div class="ct">{conclusion}</div>
 </section>
 
 <section class="card">
-  <h2>🏆 推奨買い目（予算{budget:,}円）</h2>
+  <h2>Bets &nbsp;／&nbsp; 予算 {budget:,}円</h2>
   <div class="tw">
     <table>
       <thead><tr><th>#</th><th>買い目</th><th>オッズ</th><th>賭金</th><th>想定収支</th></tr></thead>
       <tbody>{bet_rows}</tbody>
     </table>
   </div>
-  <div class="bs"><div><span>合計投資 </span><strong>{total_amount:,}円</strong></div></div>
+  <div class="bs"><span>合計投資</span><strong>{total_amount:,}円</strong></div>
 </section>
 
 <section class="card">
-  <h2>🔍 各艇評価</h2>
+  <h2>Each Boat</h2>
   {racer_cards}
 </section>
 
 <section class="card">
-  <h2>⚠️ 適用した学習ルール</h2>
+  <h2>Rules Applied</h2>
   <ul class="rl2">{rules_html}</ul>
 </section>
 
 <section class="card">
-  <h2>💡 戦略メモ</h2>
+  <h2>Memo</h2>
   <div class="memo">{memo}</div>
 </section>
 
 {pnl_html}
 
 <footer>
-  <p>🚤 boatrace-mcp | Generated by Claude</p>
-  <p style="margin-top:4px">このレポートは24時間後に自動削除されます</p>
+  <p>boatrace-mcp &nbsp;|&nbsp; Generated by Claude</p>
+  <p style="margin-top:4px">このレポートは一定時間後に自動削除されます</p>
 </footer>
 </body>
 </html>"""
