@@ -646,6 +646,24 @@ def get_learning_rules(
                 section.append(f"  {r['id']}: {r['text']}")
             result_sections.append("\n".join(section))
 
+    # ── 出力フォーマットガイド（常に返す）──
+    fmt_path = RULES_DIR / "output_format.yaml"
+    if fmt_path.exists():
+        with open(fmt_path, encoding="utf-8") as f:
+            fdata = yaml.safe_load(f)
+        fmt_block = ["\n【予想レポート出力フォーマット】"]
+        fmt_block.append("  最終的な買い目提示・予想アウトプット時は必ず以下のMarkdown構造で出力すること：")
+        fmt_block.append("")
+        for line in fdata.get("format", "").strip().splitlines():
+            fmt_block.append(f"  {line}")
+        notes = fdata.get("notes", [])
+        if notes:
+            fmt_block.append("")
+            fmt_block.append("  【注意事項】")
+            for note in notes:
+                fmt_block.append(f"    - {note}")
+        result_sections.append("\n".join(fmt_block))
+
     # ── 会場別ルール ──
     if venue is not None:
         venue_files = sorted(RULES_DIR.glob(f"venues/{venue:02d}_*.yaml"))
