@@ -681,8 +681,15 @@ def get_learning_rules(
 
             water = vdata.get("water_type", "")
             dist = vdata.get("course_length", "")
+            stable = vdata.get("stable_board_used", False)
             night = "ナイター開催あり" if vdata.get("night_race") else "デイ開催"
-            section.append(f"  基本情報: {water} / {dist}m / {night}")
+            if stable == "conditional":
+                dist_str = f"{dist}m（荒天時1200mに短縮・安定板使用あり）"
+            elif stable is True:
+                dist_str = f"{dist}m（安定板使用あり）"
+            else:
+                dist_str = f"{dist}m"
+            section.append(f"  基本情報: {water} / {dist_str} / {night}")
 
             for label, key in [("▼特性", "characteristics"), ("▼注意点", "cautions"), ("▼推奨戦略", "recommended_strategy")]:
                 items = vdata.get(key, [])
