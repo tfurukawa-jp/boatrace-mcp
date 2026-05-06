@@ -3,7 +3,7 @@ venue_id: 11
 venue_name: びわこ
 water_type: freshwater       # 淡水（琵琶湖）
 course_length: 1800
-stable_board_used: true      # 強風時に安定板使用あり
+stable_board_used: conditional  # 強風時のみ安定板使用（常時ではない）
 night_race: false
 region: 関西（滋賀県）
 

@@ -3,7 +3,7 @@ venue_id: 3
 venue_name: 江戸川
 water_type: brackish         # 汽水（荒川から引き込んだ河川水面）
 course_length: 1200
-stable_board_used: true      # 荒天時に安定板使用頻度が高い
+stable_board_used: conditional  # 荒天時のみ安定板使用（常時ではない）
 night_race: false
 region: 関東（東京都）
 

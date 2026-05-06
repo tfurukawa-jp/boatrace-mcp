@@ -3,7 +3,7 @@ venue_id: 10
 venue_name: 三国
 water_type: seawater         # 海水（九頭竜川河口）
 course_length: 1200
-stable_board_used: true      # 強風時に安定板使用あり
+stable_board_used: conditional  # 強風時のみ安定板使用（常時ではない）
 night_race: false
 region: 北陸（福井県）
 

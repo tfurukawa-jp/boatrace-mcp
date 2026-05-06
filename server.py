@@ -683,10 +683,10 @@ def get_learning_rules(
             dist = vdata.get("course_length", "")
             stable = vdata.get("stable_board_used", False)
             night = "ナイター開催あり" if vdata.get("night_race") else "デイ開催"
-            if stable == "conditional":
+            if stable == "conditional" and int(dist) > 1200:
                 dist_str = f"{dist}m（荒天時1200mに短縮・安定板使用あり）"
-            elif stable is True:
-                dist_str = f"{dist}m（安定板使用あり）"
+            elif stable == "conditional":
+                dist_str = f"{dist}m（強風時安定板使用あり・常時ではない）"
             else:
                 dist_str = f"{dist}m"
             section.append(f"  基本情報: {water} / {dist_str} / {night}")
