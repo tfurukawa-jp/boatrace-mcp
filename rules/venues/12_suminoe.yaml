@@ -2,8 +2,8 @@
 venue_id: 12
 venue_name: 住之江
 water_type: freshwater       # 淡水
-course_length: 1800          # メートル
-stable_board_used: false     # 通常は安定板なし
+course_length: 1800          # 標準1800m（荒天時・時間短縮時のみ1200mに変更）
+stable_board_used: conditional  # 強風時はどの会場でも使用あり（直前情報で要確認）
 night_race: true             # ナイター開催あり（トワイライト）
 region: 大阪
 

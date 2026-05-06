@@ -2,8 +2,8 @@
 venue_id: 15
 venue_name: 丸亀
 water_type: seawater         # 海水（瀬戸内海）
-course_length: 1800
-stable_board_used: false
+course_length: 1800          # 標準1800m（荒天時・時間短縮時のみ1200mに変更）
+stable_board_used: conditional  # 強風時はどの会場でも使用あり（直前情報で要確認）
 night_race: false
 region: 四国（香川県）
 

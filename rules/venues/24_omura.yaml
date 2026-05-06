@@ -2,8 +2,8 @@
 venue_id: 24
 venue_name: 大村
 water_type: seawater         # 海水（大村湾）
-course_length: 1200
-stable_board_used: false
+course_length: 1800          # 標準1800m（荒天時・時間短縮時のみ1200mに変更）
+stable_board_used: conditional  # 強風時はどの会場でも使用あり（直前情報で要確認）
 night_race: true             # ナイター開催あり
 region: 九州（長崎県）
 
