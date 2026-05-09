@@ -815,6 +815,720 @@ def calc_trigami_threshold(odds: float, total_budget: int) -> str:
     return "\n".join(lines)
 
 
+# ── 穴予想エンジン: 展示スコア計算 ───────────────────────
+
+@mcp.tool()
+def calc_exhibition_score(racers_data: str) -> str:
+    """
+    各艇の展示スコア（0〜100点）を計算する。穴予想エンジンの「展示重視穴」ロジックの素材。
+
+    racers_data: 6艇分の直前情報リストのJSON文字列。
+      例: '[{"boat_no":1,"name":"...","exhibit_time":"6.78","weight":52,"tilt":0.0,"exhibit_st":"0.16"}, ...]'
+      欠損値は null か "-" を入れてOK（その項目は0点扱い）。
+
+    スコア配分（古川さん仕様）:
+      加点
+        展示タイム順位: 1位+30 / 2位+20 / 3位+10
+        体重:           ≦51kg+15 / ≦52kg+5
+        チルト:         ≦-0.5+10
+        展示ST:         ≦.05+20 / ≦.10+10 / ≦.15+5
+      減点
+        展示ST  ≧.20: -15
+        体重    ≧55kg: -10
+        チルト  ≧0.0:  -5
+      合計を 0〜100 にクリップ。
+
+    戻り値: JSON文字列（structured data）
+      {"scores": [{"boat_no", "name", "score", "exhibit_time_rank",
+                   "breakdown": {"time_rank_pts","weight_pts","tilt_pts","st_pts","deductions"}}, ...]}
+      scores はスコア降順でソート済み。
+    """
+    try:
+        racers = json.loads(racers_data)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"racers_dataのJSON形式が不正: {e}"}, ensure_ascii=False)
+
+    if not isinstance(racers, list) or not racers:
+        return json.dumps({"error": "racers_dataは1艇以上のリストである必要があります"}, ensure_ascii=False)
+
+    def _to_float(v):
+        try:
+            if v is None or v == "" or v == "-":
+                return None
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    # 展示タイム順位（小さい順）— タイム不明艇は順位なし
+    times_with_idx = []
+    for i, r in enumerate(racers):
+        t = _to_float(r.get("exhibit_time"))
+        if t is not None and t > 0:
+            times_with_idx.append((t, i))
+    times_with_idx.sort(key=lambda x: x[0])
+    rank_by_idx = {idx: rank + 1 for rank, (_, idx) in enumerate(times_with_idx)}
+
+    scores = []
+    for i, r in enumerate(racers):
+        boat_no = r.get("boat_no")
+        name    = r.get("name", "")
+        weight  = _to_float(r.get("weight"))
+        tilt    = _to_float(r.get("tilt"))
+        st      = _to_float(r.get("exhibit_st"))
+        rank    = rank_by_idx.get(i, 0)  # 0=未ランク
+
+        # 加点
+        time_rank_pts = {1: 30, 2: 20, 3: 10}.get(rank, 0)
+
+        weight_pts = 0
+        if weight is not None:
+            if weight <= 51:
+                weight_pts = 15
+            elif weight <= 52:
+                weight_pts = 5
+
+        tilt_pts = 10 if (tilt is not None and tilt <= -0.5) else 0
+
+        st_pts = 0
+        if st is not None:
+            if st <= 0.05:
+                st_pts = 20
+            elif st <= 0.10:
+                st_pts = 10
+            elif st <= 0.15:
+                st_pts = 5
+
+        # 減点
+        deductions = 0
+        if st is not None and st >= 0.20:
+            deductions += -15
+        if weight is not None and weight >= 55:
+            deductions += -10
+        if tilt is not None and tilt >= 0.0:
+            deductions += -5
+
+        total = time_rank_pts + weight_pts + tilt_pts + st_pts + deductions
+        total = max(0, min(100, total))  # 0〜100にクリップ
+
+        scores.append({
+            "boat_no": boat_no,
+            "name": name,
+            "score": total,
+            "exhibit_time_rank": rank if rank > 0 else None,
+            "breakdown": {
+                "time_rank_pts": time_rank_pts,
+                "weight_pts": weight_pts,
+                "tilt_pts": tilt_pts,
+                "st_pts": st_pts,
+                "deductions": deductions,
+            },
+        })
+
+    scores.sort(key=lambda x: x["score"], reverse=True)
+    return json.dumps({"scores": scores}, ensure_ascii=False, indent=2)
+
+
+# ── 穴予想エンジン: 市場本命オッズ統計 ───────────────────
+
+@mcp.tool()
+def calc_market_favorite_oddsstats(odds_data: str) -> str:
+    """
+    3連単オッズ全件から市場本命統計を計算し、逆張り強度を判定する。
+
+    odds_data: 3連単オッズリストのJSON文字列。
+      例: '[{"combination":"1-2-3","odds":3.4}, {"combination":"1-3-2","odds":4.1}, ...]'
+      get_odds の出力（人気上位30件）でも、120件全件でも動く。
+
+    判定ロジック（古川さん仕様）:
+      最低オッズ組み合わせ（=市場本命）の3連単オッズで:
+        ≦8.0倍   : 市場が固い         → 逆張り強(strong)
+        8.0〜12.0倍: 妥当な人気       → 逆張り中(medium)
+        ≧12.0倍  : 実力均衡/不確定要素 → 逆張り発動せず(off)
+      追加: 1-X-Y上位3パターン平均オッズが10倍以下 → 1コース過信フラグON
+
+    戻り値: JSON文字列
+      {"favorite": {"combination","odds"},
+       "first_course_top3_avg": float,
+       "second_course_top3_avg": float,
+       "third_course_top3_avg": float,
+       "verdict": "tight"|"moderate"|"balanced",
+       "reverse_intensity": "strong"|"medium"|"off",
+       "first_course_overconfidence": bool,
+       "interpretation": "..."}
+    """
+    try:
+        odds_list = json.loads(odds_data)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"odds_dataのJSON形式が不正: {e}"}, ensure_ascii=False)
+
+    if not isinstance(odds_list, list) or not odds_list:
+        return json.dumps({"error": "odds_dataは1件以上のリストである必要があります"}, ensure_ascii=False)
+
+    # オッズ値で正規化（数値変換できないものは除外）
+    parsed = []
+    for entry in odds_list:
+        combo = entry.get("combination", "")
+        try:
+            odds_val = float(entry.get("odds", 0))
+        except (TypeError, ValueError):
+            continue
+        if odds_val <= 0 or not re.match(r"^[1-6]-[1-6]-[1-6]$", combo):
+            continue
+        parsed.append((odds_val, combo))
+
+    if not parsed:
+        return json.dumps({"error": "有効なオッズデータが1件もありません"}, ensure_ascii=False)
+
+    parsed.sort(key=lambda x: x[0])
+    fav_odds, fav_combo = parsed[0]
+
+    # 1着頭別の上位3平均
+    def _top3_avg(first_digit: str) -> Optional[float]:
+        filtered = [o for o, c in parsed if c.startswith(f"{first_digit}-")]
+        top3 = filtered[:3] if len(filtered) >= 3 else filtered
+        return round(sum(top3) / len(top3), 2) if top3 else None
+
+    first_avg  = _top3_avg("1")
+    second_avg = _top3_avg("2")
+    third_avg  = _top3_avg("3")
+
+    # 逆張り強度判定（市場本命オッズベース）
+    if fav_odds <= 8.0:
+        verdict = "tight"
+        reverse_intensity = "strong"
+        verdict_jp = "市場が固い"
+        intent_jp = "本命1着固定の信頼度を下げ、2-1/3-1の差し1着シナリオを本線格上げ"
+    elif fav_odds <= 12.0:
+        verdict = "moderate"
+        reverse_intensity = "medium"
+        verdict_jp = "妥当な人気"
+        intent_jp = "本命系も維持しつつ、3着付けで穴艇を保険厚めに含める"
+    else:
+        verdict = "balanced"
+        reverse_intensity = "off"
+        verdict_jp = "実力均衡または不確定要素多い"
+        intent_jp = "逆張りは発動せず、展示重視穴のみで全方位カバー"
+
+    # 1コース過信フラグ
+    first_overconf = first_avg is not None and first_avg <= 10.0
+
+    interpretation = (
+        f"市場本命 {fav_combo} のオッズ {fav_odds:.1f}倍 → {verdict_jp}。"
+        f"逆張り強度: {reverse_intensity}。{intent_jp}。"
+    )
+    if first_overconf:
+        interpretation += f" さらに1-X-Y上位3平均{first_avg:.1f}倍で1コース過信気味、本命切り検討。"
+
+    return json.dumps({
+        "favorite": {"combination": fav_combo, "odds": fav_odds},
+        "first_course_top3_avg":  first_avg,
+        "second_course_top3_avg": second_avg,
+        "third_course_top3_avg":  third_avg,
+        "verdict": verdict,
+        "reverse_intensity": reverse_intensity,
+        "first_course_overconfidence": first_overconf,
+        "interpretation": interpretation,
+    }, ensure_ascii=False, indent=2)
+
+
+# ── 穴予想エンジン: 本体 ───────────────────────────────
+
+def _parse_pct(val) -> float:
+    """'55%' / '55.0' / 55 / 55.0 を float に変換。欠損は0.0。"""
+    if val is None:
+        return 0.0
+    s = str(val).strip().replace("%", "")
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _build_aggressive_bets(
+    intensity: str,
+    fav_combo: str,
+    fav_odds: float,
+    dark_horses: list,
+    third_pool: list,
+    scores: list,
+    odds_dict: dict,
+    budget: int,
+) -> list:
+    """
+    逆張り強度に応じて買い目を機械的に組み立てる。
+    戦略は以下の3通り:
+      strong : 本命100円 + 差し1着系70% + 展示穴3着付け30%
+      medium : 本命系50% + 差し系30% + 展示穴20%
+      off    : 本命100円 + 展示重視全方位
+    """
+    bets = []
+
+    def _add(combo: str, amount: int, rationale: str):
+        o = odds_dict.get(combo)
+        if o is None or amount < 100:
+            return
+        bets.append({
+            "combination": combo,
+            "odds": o,
+            "amount": amount,
+            "rationale": rationale,
+        })
+
+    def _allocate(combos: list, total: int, rationale_fn):
+        """combos = [combo文字列, ...] に total円を100円単位で均等配分"""
+        if not combos or total < 100:
+            return
+        per = max(100, (total // len(combos)) // 100 * 100)
+        for c in combos:
+            _add(c, per, rationale_fn(c))
+
+    # 高スコア艇（展示重視穴の素材）
+    high_score_boats = [s["boat_no"] for s in scores if s["score"] >= 60]
+
+    if intensity == "strong":
+        # 1. 本命最小保証
+        _add(fav_combo, 100, "本命最小保証（市場が固く本命1着固定の信頼度低）")
+        budget_left = budget - 100
+
+        # 2. 差し1着シナリオ: 2-1-X, 3-1-X（3着候補プールから）
+        sashi_combos = []
+        for first in ("2", "3"):
+            for third in third_pool:
+                if str(third) in (first, "1"):
+                    continue
+                c = f"{first}-1-{third}"
+                if c in odds_dict and 5 <= odds_dict[c] <= 80:
+                    sashi_combos.append(c)
+        sashi_budget = int(budget_left * 0.7)
+        _allocate(sashi_combos, sashi_budget,
+                  lambda c: f"逆張り強：差し1着シナリオ（{c[0]}コース→1コース連→{c[-1]}号艇）")
+        spent = sum(b["amount"] for b in bets if b["combination"] in sashi_combos)
+        budget_left -= spent
+
+        # 3. 展示穴3着付け: 1-2-{穴}, 1-3-{穴}, 2-1-{穴}
+        ana_combos = []
+        for h in dark_horses:
+            for prefix in ("1-2-", "1-3-", "2-1-"):
+                c = f"{prefix}{h}"
+                if str(h) in prefix.split("-")[:2]:
+                    continue
+                if c in odds_dict and odds_dict[c] >= 10:
+                    ana_combos.append(c)
+        _allocate(list(dict.fromkeys(ana_combos)), budget_left,
+                  lambda c: f"展示穴3着付け（{c[-1]}号艇=展示スコア60+の逆襲候補）")
+
+    elif intensity == "medium":
+        # 1. 本命系: 1-2-X, 1-3-X（3着候補プールから上位3）
+        honmei_combos = []
+        for second in ("2", "3"):
+            for third in third_pool:
+                if str(third) in (second, "1"):
+                    continue
+                c = f"1-{second}-{third}"
+                if c in odds_dict:
+                    honmei_combos.append((c, odds_dict[c]))
+        honmei_combos.sort(key=lambda x: x[1])  # 低オッズ優先
+        honmei_combos = [c for c, _ in honmei_combos[:4]]
+        _allocate(honmei_combos, int(budget * 0.5),
+                  lambda c: f"本命系：1コース1着、{c[2]}コース2着、{c[-1]}号艇3着")
+
+        # 2. 差し系保険: 2-1-X, 3-1-X（オッズが付いているもの中心1〜2点）
+        sashi_combos = []
+        for first in ("2", "3"):
+            for third in third_pool:
+                if str(third) in (first, "1"):
+                    continue
+                c = f"{first}-1-{third}"
+                if c in odds_dict and 5 <= odds_dict[c] <= 80:
+                    sashi_combos.append((c, odds_dict[c]))
+        sashi_combos.sort(key=lambda x: x[1])
+        sashi_combos = [c for c, _ in sashi_combos[:3]]
+        _allocate(sashi_combos, int(budget * 0.3),
+                  lambda c: f"逆張り中：差し系保険（{c[0]}コース1着シナリオ）")
+
+        # 3. 展示穴3着付け
+        ana_combos = []
+        for h in dark_horses:
+            c = f"1-2-{h}"
+            if h not in (1, 2) and c in odds_dict and odds_dict[c] >= 10:
+                ana_combos.append(c)
+            c = f"1-3-{h}"
+            if h not in (1, 3) and c in odds_dict and odds_dict[c] >= 10:
+                ana_combos.append(c)
+        _allocate(list(dict.fromkeys(ana_combos)), int(budget * 0.2),
+                  lambda c: f"展示穴3着付け（{c[-1]}号艇=逆襲候補）")
+
+    else:  # off — 展示重視全方位（実力均衡。逆張り発動せず、展示穴のみで広く）
+        # 1. 本命最小保証
+        _add(fav_combo, 100, "本命最小保証（実力均衡なので逆張りオフ）")
+        budget_left = budget - 100
+
+        # 2. 1コース1着×3着候補プール広範囲（実力均衡なので1コースは保持しつつ2-3着を広げる）
+        sweep = []
+        for second in third_pool:
+            if second == 1:
+                continue
+            for third in third_pool:
+                if third in (1, second):
+                    continue
+                c = f"1-{second}-{third}"
+                if c in odds_dict and 5 <= odds_dict[c] <= 200:
+                    sweep.append((c, odds_dict[c]))
+
+        # 3. 穴艇1着の妙味枠（高オッズ）
+        for h in dark_horses:
+            for third in third_pool:
+                if third in (h, 1) or third == h:
+                    continue
+                c = f"{h}-1-{third}"
+                if c in odds_dict and odds_dict[c] >= 20:
+                    sweep.append((c, odds_dict[c]))
+
+        sweep.sort(key=lambda x: x[1])  # 低オッズ優先で採用
+        unique_combos = list(dict.fromkeys(c for c, _ in sweep))[:6]
+        _allocate(unique_combos, budget_left,
+                  lambda c: (
+                      f"展示重視・穴艇1着妙味（{c[0]}-{c[2]}-{c[-1]}）"
+                      if c[0] != "1"
+                      else f"展示重視全方位（1コース1着、{c[2]}-{c[-1]}3着候補プール）"
+                  ))
+
+    # 同じ買い目が複数戦略から重複した場合は1点に合算（賭金合計＋根拠を「/」で結合）
+    merged: dict[str, dict] = {}
+    for b in bets:
+        c = b["combination"]
+        if c in merged:
+            merged[c]["amount"] += b["amount"]
+            if b["rationale"] not in merged[c]["rationale"]:
+                merged[c]["rationale"] += " / " + b["rationale"]
+        else:
+            merged[c] = dict(b)
+    return list(merged.values())
+
+
+@mcp.tool()
+def get_aggressive_prediction(
+    racers_data: str,
+    exhibition_data: str,
+    odds_data: str,
+    budget: int,
+) -> str:
+    """
+    穴予想エンジン本体。市場本命オッズ＋展示スコア＋当地3連率から穴買い目を組み立てる。
+
+    racers_data: 出走表JSON。
+      例: '[{"boat_no":1,"name":"...","local_top_3":55.2}, ...]'
+    exhibition_data: 直前情報JSON。calc_exhibition_score の入力と同形式。
+      例: '[{"boat_no":1,"name":"...","exhibit_time":"6.78","weight":52,"tilt":0.0,"exhibit_st":"0.16"}, ...]'
+    odds_data: 3連単オッズJSON。calc_market_favorite_oddsstats の入力と同形式。
+      例: '[{"combination":"1-2-3","odds":3.4}, ...]'
+    budget: 予算（円、整数）
+
+    内部処理:
+      1) calc_exhibition_score を呼んで6艇のスコア取得
+      2) calc_market_favorite_oddsstats を呼んで市場判定（strong/medium/off）
+      3) 当地3連率と1着頭オッズの乖離で逆張り強度を補正
+      4) 展示穴艇判定（スコア60+ かつ 当地3連率上位3外）
+      5) 戦略別に買い目構築
+
+    戻り値: JSON文字列（recommended_bets / candidates / market_assessment 等を含む）
+    """
+    # ── 入力パース ──
+    try:
+        racers   = json.loads(racers_data)
+        odds_list = json.loads(odds_data)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"入力JSONの形式が不正: {e}"}, ensure_ascii=False)
+
+    if budget < 1000:
+        return json.dumps({"error": "予算は1000円以上を指定してください"}, ensure_ascii=False)
+
+    # ── 1. 展示スコア計算 ──
+    scores_result = json.loads(calc_exhibition_score(exhibition_data))
+    if "error" in scores_result:
+        return json.dumps({"error": f"展示スコア計算エラー: {scores_result['error']}"}, ensure_ascii=False)
+    scores = scores_result["scores"]
+
+    # ── 2. 市場本命統計 ──
+    market_result = json.loads(calc_market_favorite_oddsstats(odds_data))
+    if "error" in market_result:
+        return json.dumps({"error": f"オッズ統計エラー: {market_result['error']}"}, ensure_ascii=False)
+
+    fav_combo = market_result["favorite"]["combination"]
+    fav_odds  = market_result["favorite"]["odds"]
+    fav_first = int(fav_combo.split("-")[0])
+    intensity = market_result["reverse_intensity"]
+
+    # ── 3. 当地3連率×1着頭オッズの乖離で補正 ──
+    fav_first_local3 = next(
+        (_parse_pct(r.get("local_top_3", 0)) for r in racers if r.get("boat_no") == fav_first),
+        0.0,
+    )
+    adjustment_notes = []
+    if fav_odds <= 5.0:
+        if fav_first_local3 >= 80:
+            intensity = "off"
+            adjustment_notes.append(
+                f"{fav_first}号艇の当地3連率{fav_first_local3:.0f}%超 + 1着頭オッズ{fav_odds:.1f}倍 → 市場判断妥当、逆張りオフに補正"
+            )
+        elif fav_first_local3 <= 60:
+            if intensity == "off":
+                intensity = "medium"
+            else:
+                intensity = "strong"
+            adjustment_notes.append(
+                f"{fav_first}号艇の当地3連率{fav_first_local3:.0f}%以下 + 1着頭オッズ{fav_odds:.1f}倍 → 市場過大評価、逆張り発動"
+            )
+
+    # ── 4. 展示穴艇判定 ──
+    high_score_boats = [s["boat_no"] for s in scores if s["score"] >= 60]
+    sorted_local3 = sorted(racers, key=lambda r: _parse_pct(r.get("local_top_3", 0)), reverse=True)
+    top_local3_boats = [r["boat_no"] for r in sorted_local3[:3]]
+    dark_horses = [b for b in high_score_boats if b not in top_local3_boats]
+    third_pool  = sorted(set(high_score_boats + top_local3_boats))
+
+    # ── 5. 買い目構築 ──
+    odds_dict = {}
+    for e in odds_list:
+        try:
+            odds_dict[e["combination"]] = float(e["odds"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    bets = _build_aggressive_bets(
+        intensity, fav_combo, fav_odds, dark_horses, third_pool, scores, odds_dict, budget
+    )
+
+    # ── 6. 集計 ──
+    total_amount = sum(b["amount"] for b in bets)
+    profits = [int(b["amount"] * b["odds"]) - total_amount for b in bets]
+    min_profit = min(profits) if profits else 0
+    max_profit = max(profits) if profits else 0
+
+    # ── 7. candidates 整形（各艇の役割） ──
+    candidates = []
+    score_by_boat = {s["boat_no"]: s["score"] for s in scores}
+    for boat in (1, 2, 3, 4, 5, 6):
+        score = score_by_boat.get(boat, 0)
+        local3 = next((_parse_pct(r.get("local_top_3", 0)) for r in racers if r.get("boat_no") == boat), 0)
+        if boat in dark_horses:
+            role = "逆襲候補（展示重視穴）"
+            rationale = f"展示スコア{score}点。当地3連率{local3:.0f}%（上位3外）。3着付けで穴妙味"
+        elif boat == fav_first and intensity == "strong":
+            role = "本命切り候補"
+            rationale = f"市場本命だが逆張り強発動。1着固定の信頼度低、最小保証のみ"
+        elif boat in (2, 3) and intensity in ("strong", "medium") and boat != fav_first:
+            role = "差し1着候補"
+            rationale = f"差し1着シナリオの主軸。{boat}-1-X系で攻める"
+        elif boat in top_local3_boats:
+            role = "当地3連率上位"
+            rationale = f"当地3連率{local3:.0f}%。3着候補プール入り"
+        else:
+            role = "切り候補"
+            rationale = f"展示スコア{score}点、当地3連率{local3:.0f}%"
+        candidates.append({
+            "boat_no": boat,
+            "exhibition_score": score,
+            "local_top_3": round(local3, 1),
+            "role": role,
+            "rationale": rationale,
+        })
+
+    intensity_jp = {"strong": "強", "medium": "中", "off": "発動せず"}[intensity]
+    strategy_summary = (
+        f"逆張り強度: {intensity_jp}（{intensity}）。{market_result['interpretation']}"
+    )
+    if adjustment_notes:
+        strategy_summary += " 補正: " + " / ".join(adjustment_notes)
+
+    return json.dumps({
+        "engine": "aggressive",
+        "market_assessment": {
+            "favorite": market_result["favorite"],
+            "verdict": market_result["verdict"],
+            "reverse_intensity_initial": market_result["reverse_intensity"],
+            "reverse_intensity_final": intensity,
+            "first_course_overconfidence": market_result["first_course_overconfidence"],
+            "first_course_top3_avg": market_result["first_course_top3_avg"],
+        },
+        "adjustment_notes": adjustment_notes,
+        "exhibition_dark_horses": dark_horses,
+        "third_targets_pool": third_pool,
+        "candidates": candidates,
+        "recommended_bets": bets,
+        "total_amount": total_amount,
+        "min_potential_profit": min_profit,
+        "max_potential_profit": max_profit,
+        "strategy_summary": strategy_summary,
+    }, ensure_ascii=False, indent=2)
+
+
+# ── 穴予想エンジン: 統合（堅実派×穴派） ────────────────
+
+@mcp.tool()
+def get_synthesis_prediction(
+    safe_bets: str,
+    aggressive_bets: str,
+    budget: int,
+) -> str:
+    """
+    堅実派買い目（Claudeが組み立てたもの）と穴派買い目（get_aggressive_prediction の出力）を
+    統合し、3つの配分案＋対立ポイントを返す。
+
+    safe_bets: 堅実派買い目のJSON文字列。形式は次のどちらか:
+      A) リスト: '[{"combination":"1-2-3","odds":3.4,"amount":1500}, ...]'
+      B) ラッパー: '{"recommended_bets":[...], "candidates":[...]}'
+    aggressive_bets: get_aggressive_prediction の戻り値JSON（recommended_bets / candidates 含む）。
+    budget: 予算（円、整数）
+
+    統合ロジック:
+      - 両者一致買い目 → 両者 amount の平均（厚め配分）
+      - 堅実派のみ     → 堅実派 amount を半額
+      - 穴派のみ       → 穴派 amount を半額
+      - 合計が予算超過 → 比率で按分削減
+      - 合計が予算未満 → 両者一致点に余りを追加配分
+
+    戻り値: JSON文字列
+      {"safe_allocation","aggressive_allocation","synthesis_allocation",
+       "conflict_points","summary","budget"}
+    """
+    try:
+        safe = json.loads(safe_bets)
+        agg_full = json.loads(aggressive_bets)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"入力JSONエラー: {e}"}, ensure_ascii=False)
+
+    # safe_bets はリストでもラッパー形式でも受け付ける
+    if isinstance(safe, dict) and "recommended_bets" in safe:
+        safe_list = safe["recommended_bets"]
+        safe_candidates = safe.get("candidates", [])
+    elif isinstance(safe, list):
+        safe_list = safe
+        safe_candidates = []
+    else:
+        return json.dumps({"error": "safe_bets はリスト形式 または {recommended_bets:[...]} を含むdictで指定"}, ensure_ascii=False)
+
+    if not isinstance(agg_full, dict) or "recommended_bets" not in agg_full:
+        return json.dumps({"error": "aggressive_bets は get_aggressive_prediction の戻り値（recommended_bets を含むdict）を指定"}, ensure_ascii=False)
+
+    agg_list = agg_full["recommended_bets"]
+    agg_candidates = agg_full.get("candidates", [])
+
+    if budget < 1000:
+        return json.dumps({"error": "予算は1000円以上を指定してください"}, ensure_ascii=False)
+
+    # ── 1. 両者の dict 化 ──
+    safe_dict = {b["combination"]: b for b in safe_list if "combination" in b}
+    agg_dict  = {b["combination"]: b for b in agg_list if "combination" in b}
+
+    common    = sorted(set(safe_dict) & set(agg_dict))
+    safe_only = sorted(set(safe_dict) - set(agg_dict))
+    agg_only  = sorted(set(agg_dict) - set(safe_dict))
+
+    # ── 2. 統合配分（仮配分） ──
+    synthesis = []
+    for c in common:
+        avg_raw = (int(safe_dict[c].get("amount", 0)) + int(agg_dict[c].get("amount", 0))) / 2
+        amount = max(100, int(avg_raw // 100) * 100)
+        synthesis.append({
+            "combination": c,
+            "odds": float(safe_dict[c].get("odds", agg_dict[c].get("odds", 0))),
+            "amount": amount,
+            "adopted_from": "両者一致",
+        })
+    for c in safe_only:
+        amount = max(100, int(safe_dict[c].get("amount", 0)) // 2 // 100 * 100)
+        synthesis.append({
+            "combination": c,
+            "odds": float(safe_dict[c].get("odds", 0)),
+            "amount": amount,
+            "adopted_from": "堅実派採用",
+        })
+    for c in agg_only:
+        amount = max(100, int(agg_dict[c].get("amount", 0)) // 2 // 100 * 100)
+        synthesis.append({
+            "combination": c,
+            "odds": float(agg_dict[c].get("odds", 0)),
+            "amount": amount,
+            "adopted_from": "穴派採用",
+        })
+
+    # ── 3. 予算調整 ──
+    total = sum(b["amount"] for b in synthesis)
+    if total > budget and total > 0:
+        # 比率で按分削減（100円未満は100円に切り上げ）
+        ratio = budget / total
+        for b in synthesis:
+            b["amount"] = max(100, int(b["amount"] * ratio) // 100 * 100)
+    elif total < budget:
+        # 余りを両者一致点に均等追加（一致点がなければ堅実派のオッズ最低点）
+        target_bets = [b for b in synthesis if b["adopted_from"] == "両者一致"]
+        if not target_bets:
+            sf = [b for b in synthesis if b["adopted_from"] == "堅実派採用"]
+            sf.sort(key=lambda x: x["odds"])
+            target_bets = sf[:1]
+        if target_bets:
+            extra = budget - total
+            per = extra // len(target_bets) // 100 * 100
+            for b in target_bets:
+                b["amount"] += per
+
+    # ── 4. 対立ポイント抽出 ──
+    def _is_in_bets(boat: int, bets: list) -> bool:
+        bn = str(boat)
+        return any(bn in b.get("combination", "").split("-") for b in bets)
+
+    conflict_points = []
+    cand_by_boat = {c["boat_no"]: c for c in agg_candidates}
+    safe_cand_by_boat = {c.get("boat_no"): c for c in safe_candidates}
+
+    for boat in (1, 2, 3, 4, 5, 6):
+        in_safe = _is_in_bets(boat, safe_list)
+        in_agg  = _is_in_bets(boat, agg_list)
+        if in_safe == in_agg:
+            continue  # 評価が一致なら対立なし
+
+        agg_role = cand_by_boat.get(boat, {}).get("role", "（不明）")
+        agg_reason = cand_by_boat.get(boat, {}).get("rationale", "")
+        safe_label = safe_cand_by_boat.get(boat, {}).get("label", "採用" if in_safe else "切り")
+
+        if in_safe and not in_agg:
+            issue = f"堅実派は買い目に含めるが、穴派は『{agg_role}』と評価。{agg_reason}"
+            safe_view = safe_label
+            agg_view = agg_role
+        else:
+            issue = f"堅実派は買い目に含めない一方、穴派は『{agg_role}』として採用。{agg_reason}"
+            safe_view = "切り"
+            agg_view = agg_role
+
+        conflict_points.append({
+            "boat_no": boat,
+            "safe_view": safe_view,
+            "aggressive_view": agg_view,
+            "issue": issue,
+        })
+
+    # ── 5. サマリ ──
+    final_total = sum(b["amount"] for b in synthesis)
+    profits = [int(b["amount"] * b["odds"]) - final_total for b in synthesis]
+    summary = (
+        f"統合: 両者一致{len(common)}点 / 堅実派のみ{len(safe_only)}点 / 穴派のみ{len(agg_only)}点。"
+        f"対立ポイント{len(conflict_points)}件。合計投資{final_total:,}円。"
+    )
+
+    return json.dumps({
+        "safe_allocation": safe_list,
+        "aggressive_allocation": agg_list,
+        "synthesis_allocation": synthesis,
+        "synthesis_total": final_total,
+        "synthesis_min_profit": min(profits) if profits else 0,
+        "synthesis_max_profit": max(profits) if profits else 0,
+        "conflict_points": conflict_points,
+        "summary": summary,
+        "budget": budget,
+    }, ensure_ascii=False, indent=2)
+
+
 # ── Tool 8〜12: 収支記録 ──────────────────────────────
 
 @mcp.tool()
@@ -824,6 +1538,7 @@ def record_bets(
     date: str,
     bets: str,
     memo: str = "",
+    strategy: str = "synthesis",
 ) -> str:
     """
     買い目を一括記録する。
@@ -832,9 +1547,17 @@ def record_bets(
     date: 日付（"today" または "YYYYMMDD"）
     bets: JSON文字列 例: '[{"combination":"1-2-3","amount":600,"odds":5.1}, ...]'
     memo: メモ（任意）
+    strategy: 採用エンジン。"safe"（堅実派単独）/ "aggressive"（穴派単独）/ "synthesis"（統合）
+              のいずれか。デフォルト "synthesis"。
     """
     target_date = _resolve_date(date)
     race_id = f"{target_date}_{venue:02d}_{race_no:02d}"
+
+    if strategy not in ALLOWED_STRATEGIES:
+        return (
+            f'【エラー】strategy は {"/".join(ALLOWED_STRATEGIES)} のいずれかを指定してください'
+            f'（指定値: "{strategy}"）'
+        )
 
     try:
         bets_list = json.loads(bets)
@@ -846,6 +1569,7 @@ def record_bets(
 
     try:
         ws = _get_sheet()
+        header_added = _ensure_strategy_column(ws)
     except Exception as e:
         return f"【エラー】Google Sheetsへの接続に失敗しました。\n詳細: {e}"
 
@@ -862,6 +1586,7 @@ def record_bets(
             "",   # payout（未記録）
             "",   # profit（未記録）
             memo,
+            strategy,  # 11列目（0-indexed）
         ]
         for b in bets_list
     ]
@@ -877,6 +1602,7 @@ def record_bets(
         f"  買い目記録完了：{_venue_name(venue)} {race_no}R",
         "=" * 50,
         f"  race_id: {race_id}",
+        f"  採用エンジン: {strategy}",
         f"  記録点数: {len(rows)}点",
         "",
         f"  {'組み合わせ':<10}  {'賭金':>6}  {'オッズ':>6}",
@@ -886,6 +1612,9 @@ def record_bets(
         lines.append(f"  {b.get('combination',''):<10}  {b.get('amount',0):>5,}円  {b.get('odds',0):>5.1f}倍")
     lines.append("")
     lines.append(f"  合計賭け金: {total_amount:,}円")
+    if header_added:
+        lines.append("")
+        lines.append("  ※ シートに strategy 列を自動追加しました（既存行は空）。")
     lines.append("")
     return "\n".join(lines)
 
@@ -998,8 +1727,13 @@ def get_pnl_summary(period_type: str = "all", period_value: str = "") -> str:
             return date_str[:4] == period_value
         return True
 
-    # race_id単位で集計
+    # race_id単位で集計（strategy情報も保持）
     races: dict[str, dict] = {}
+    # strategy別の bet 単位集計（同一レースで複数エンジン記録があり得るため bet 単位）
+    strategy_stats: dict[str, dict] = {
+        s: {"invested": 0, "payout": 0, "hit_bets": 0, "total_bets": 0}
+        for s in ALLOWED_STRATEGIES + ("unknown",)
+    }
     for i, row in enumerate(all_rows):
         if i == 0 or not row or len(row) < 10:
             continue
@@ -1018,6 +1752,16 @@ def get_pnl_summary(period_type: str = "all", period_value: str = "") -> str:
             profit = int(float(row[9])) if row[9] else 0
         except ValueError:
             continue
+
+        # strategy 列（11番目、0-indexed）を取得。古い行は空 → "unknown"
+        strat = row[STRATEGY_COL_INDEX] if len(row) > STRATEGY_COL_INDEX and row[STRATEGY_COL_INDEX] else "unknown"
+        if strat not in strategy_stats:
+            strat = "unknown"
+        strategy_stats[strat]["invested"] += amount
+        strategy_stats[strat]["payout"]   += payout
+        strategy_stats[strat]["total_bets"] += 1
+        if payout > 0:
+            strategy_stats[strat]["hit_bets"] += 1
 
         if race_id not in races:
             races[race_id] = {"venue": venue_name, "invested": 0, "payout": 0, "hit": False}
@@ -1083,6 +1827,27 @@ def get_pnl_summary(period_type: str = "all", period_value: str = "") -> str:
         v_roi = s["payout"] / s["invested"] * 100 if s["invested"] > 0 else 0
         lines.append(f"  {v}: {s['races']}R  {v_net:+,}円  回収率{v_roi:.0f}%")
 
+    # ── エンジン別集計（safe / aggressive / synthesis / unknown） ──
+    has_strategy_data = any(s["total_bets"] > 0 for k, s in strategy_stats.items() if k != "unknown")
+    if has_strategy_data or strategy_stats["unknown"]["total_bets"] > 0:
+        lines.append("")
+        lines.append("【エンジン別】（買い目単位の的中率・回収率）")
+        for strat_name in ALLOWED_STRATEGIES + ("unknown",):
+            s = strategy_stats[strat_name]
+            if s["total_bets"] == 0:
+                continue
+            s_net = s["payout"] - s["invested"]
+            s_roi = s["payout"] / s["invested"] * 100 if s["invested"] > 0 else 0
+            s_hit = s["hit_bets"] / s["total_bets"] * 100 if s["total_bets"] > 0 else 0
+            label = {
+                "safe": "堅実派", "aggressive": "穴派",
+                "synthesis": "統合派", "unknown": "未分類（旧データ）",
+            }[strat_name]
+            lines.append(
+                f"  {label:<14}: {s['total_bets']:>3}点  的中{s['hit_bets']}点({s_hit:.0f}%)"
+                f"  収支{s_net:+,}円  回収率{s_roi:.0f}%"
+            )
+
     lines.append("")
     return "\n".join(lines)
 
@@ -1108,11 +1873,11 @@ def get_recent_bets(limit: int = 20) -> str:
     recent = data_rows[-limit:][::-1]  # 新しい順
 
     lines = [
-        "=" * 54,
+        "=" * 60,
         f"  直近{min(limit, len(recent))}件の投票記録",
-        "=" * 54,
-        f"  {'日付':<10}  {'会場':<6}  {'R':<3}  {'組合せ':<8}  {'賭金':>6}  {'オッズ':>6}  {'結果':<4}  {'収支':>8}",
-        "  " + "-" * 52,
+        "=" * 60,
+        f"  {'日付':<10}  {'会場':<6}  {'R':<3}  {'組合せ':<8}  {'賭金':>6}  {'オッズ':>6}  {'結果':<4}  {'収支':>8}  {'戦略':<10}",
+        "  " + "-" * 58,
     ]
 
     for row in recent:
@@ -1124,6 +1889,7 @@ def get_recent_bets(limit: int = 20) -> str:
         odds_str = row[6] if len(row) > 6 else ""
         result   = row[7] if len(row) > 7 else "-"
         profit_s = row[9] if len(row) > 9 else ""
+        strat    = row[STRATEGY_COL_INDEX] if len(row) > STRATEGY_COL_INDEX and row[STRATEGY_COL_INDEX] else "-"
 
         try:
             profit = int(profit_s) if profit_s not in ("", "-") else None
@@ -1132,7 +1898,7 @@ def get_recent_bets(limit: int = 20) -> str:
 
         profit_disp = f"{profit:+,}円" if profit is not None else "-"
         lines.append(
-            f"  {d:<10}  {venue:<6}  {rno:<3}  {combo:<8}  {amount:>5}円  {odds_str:>5}倍  {result:<4}  {profit_disp:>8}"
+            f"  {d:<10}  {venue:<6}  {rno:<3}  {combo:<8}  {amount:>5}円  {odds_str:>5}倍  {result:<4}  {profit_disp:>8}  {strat:<10}"
         )
 
     lines.append("")
@@ -1234,6 +2000,21 @@ def get_losing_races(period: str = "month") -> str:
 
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1fTicLnOCDAYU0d9z6UN2futydjjRT7bIa2VI2_69VKs")
 _SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+# シート列構成（strategyは末尾追加で既存の0〜10列のインデックスを維持）
+STRATEGY_COL_INDEX = 11  # 0-indexed = L列
+STRATEGY_HEADER = "strategy"
+ALLOWED_STRATEGIES = ("safe", "aggressive", "synthesis")
+
+
+def _ensure_strategy_column(ws) -> bool:
+    """1行目ヘッダーに strategy 列がなければ末尾に追加する。追加した場合 True。"""
+    headers = ws.row_values(1)
+    if STRATEGY_HEADER in headers:
+        return False
+    col_idx = len(headers) + 1  # 1-indexed
+    ws.update_cell(1, col_idx, STRATEGY_HEADER)
+    return True
 
 
 def _get_sheet():
