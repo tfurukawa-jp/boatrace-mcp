@@ -80,12 +80,25 @@ def _venue_name(venue_id: int) -> str:
     return VENUE_NAMES.get(venue_id, f"会場{venue_id}")
 
 
-def _find_race(programs: list, venue: int, race_no: int) -> Optional[dict]:
-    """programs/previews APIのフラットなリストから会場・レースを絞り込む"""
+def _find_race(programs: list, venue: int, race_no: int) -> dict:
+    """
+    programs/previews APIのフラットなリストから会場・レースを絞り込む。
+    配列の並び順には一切依存せず、場コードとレース番号の一致でのみ選ぶ。
+    該当が無ければ例外。None を返して呼び出し側の判断に委ねると、
+    「見つからなかった」が黙って素通りする経路ができてしまうため。
+    """
     for item in programs:
         if item.get("race_stadium_number") == venue and item.get("race_number") == race_no:
             return item
-    return None
+
+    available = sorted({
+        p.get("race_stadium_number") for p in programs
+        if p.get("race_stadium_number") is not None
+    })
+    raise ValueError(
+        f"{_venue_name(venue)}({venue}) {race_no}R が配信データに含まれていません"
+        f"（収録会場: {', '.join(str(v) for v in available) or 'なし'}）"
+    )
 
 
 # ── 出走表の取得経路 ───────────────────────────────────
@@ -341,10 +354,7 @@ def _fetch_racecard_from_openapi(venue: int, race_no: int, target_date: str) -> 
     url = f"https://boatraceopenapi.github.io/programs/v2/{target_date[:4]}/{target_date}.json"
     resp = requests.get(url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
-    race = _find_race(resp.json().get("programs", []), venue, race_no)
-    if race is None:
-        raise ValueError(f"{_venue_name(venue)} {race_no}R が配信データに含まれていません")
-    race = dict(race)
+    race = dict(_find_race(resp.json().get("programs", []), venue, race_no))
     source = f"BoatraceOpenAPI {url.split('/programs/')[1]}"
     _verify_racecard(race, venue, race_no, target_date, source)
     race["_source"] = source
