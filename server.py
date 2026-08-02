@@ -96,6 +96,7 @@ _RE_BOAT_COLOR = re.compile(r"is-boatColor(\d)")
 _RE_DISTANCE = re.compile(r"(\d+)\s*m")
 _RE_AGE_WEIGHT = re.compile(r"(\d+)歳\s*/\s*([\d.]+)kg")
 _RE_FL_ST = re.compile(r"F(\d+)\s*L(\d+)\s*([\d.]+)")
+_RE_MMDD = re.compile(r"(\d{1,2})月(\d{1,2})日")
 
 
 def _to_num(text: str, cast=float):
@@ -266,13 +267,58 @@ def _parse_racelist_page(html: str) -> dict:
     }
 
 
+def _verify_racecard(race: dict, venue: int, race_no: int, target_date: str, source: str) -> None:
+    """
+    応答検証層。取得データが「要求したレースそのもの」かを突合する。
+    1つでも食い違えば例外。照合材料が無くて検証できない場合も例外にする。
+    （配信停止中のAPIが古いデータを返し続けても、ここで必ず止まる）
+    """
+    problems = []
+
+    got_venue = race.get("race_stadium_number")
+    if got_venue != venue:
+        problems.append(f"会場: 要求={venue}({_venue_name(venue)}) / 取得={got_venue}")
+
+    got_no = race.get("race_number")
+    if got_no != race_no:
+        problems.append(f"レース番号: 要求={race_no}R / 取得={got_no}R")
+
+    want_y, want_m, want_d = target_date[:4], int(target_date[4:6]), int(target_date[6:8])
+
+    if race.get("race_date"):
+        # BoatraceOpenAPI: "2026-08-01" 形式。年月日すべて突合する。
+        want_iso = f"{want_y}-{want_m:02d}-{want_d:02d}"
+        got_iso = str(race["race_date"])[:10]
+        if got_iso != want_iso:
+            problems.append(f"日付: 要求={want_iso} / 取得={got_iso}")
+    elif race.get("race_date_label"):
+        # boatrace.jp: "8月2日 最終日" 形式。ページに年が無いため月日で突合する。
+        m = _RE_MMDD.search(race["race_date_label"])
+        if not m:
+            problems.append(f"日付: ページの日付表記を解釈できません（{race['race_date_label']}）")
+        elif (int(m.group(1)), int(m.group(2))) != (want_m, want_d):
+            problems.append(
+                f"日付: 要求={want_m}月{want_d}日 / 取得={m.group(1)}月{m.group(2)}日"
+            )
+    else:
+        # 照合材料が無い＝正しさを保証できない。通さない。
+        problems.append("日付: 取得データに日付情報が無く、検証できません")
+
+    if problems:
+        raise ValueError(
+            "取得したデータが要求と一致しません（" + source + "）: " + " / ".join(problems)
+        )
+
+
 def _fetch_racecard_from_boatrace_jp(venue: int, race_no: int, target_date: str) -> dict:
-    """主経路。取得・解析に失敗したら例外を送出する。"""
+    """主経路。取得・解析・検証のいずれかに失敗したら例外を送出する。"""
     url = f"{BOATRACE_JP_RACELIST_URL}?rno={race_no}&jcd={venue:02d}&hd={target_date}"
     resp = requests.get(url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
     race = _parse_racelist_page(resp.text)
-    race["_source"] = f"boatrace.jp racelist (rno={race_no}&jcd={venue:02d}&hd={target_date})"
+    source = f"boatrace.jp racelist (rno={race_no}&jcd={venue:02d}&hd={target_date})"
+    _verify_racecard(race, venue, race_no, target_date, source)
+    race["_source"] = source
     return race
 
 
@@ -289,7 +335,9 @@ def _fetch_racecard_from_openapi(venue: int, race_no: int, target_date: str, dat
     if race is None:
         raise ValueError(f"{_venue_name(venue)} {race_no}R が配信データに含まれていません")
     race = dict(race)
-    race["_source"] = f"BoatraceOpenAPI {url.split('/programs/')[1]}"
+    source = f"BoatraceOpenAPI {url.split('/programs/')[1]}"
+    _verify_racecard(race, venue, race_no, target_date, source)
+    race["_source"] = source
     return race
 
 
