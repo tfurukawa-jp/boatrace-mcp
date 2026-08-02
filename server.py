@@ -2307,6 +2307,11 @@ def get_losing_races(period: str = "month") -> str:
 
 # ── Google Sheets 接続ヘルパー ────────────────────────
 
+# スプレッドシートIDは公開リポジトリに含まれるが、認証情報ではない。
+# 実際のアクセスにはサービスアカウントの鍵が必要で、鍵は .gitignore で除外済み
+# （過去の履歴にも含まれていないことを確認済み）。
+# シート側の共有設定が「制限付き」であることが前提。
+# 共有設定を緩める場合は、このデフォルト値を削除して環境変数必須にすること。
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1fTicLnOCDAYU0d9z6UN2futydjjRT7bIa2VI2_69VKs")
 _SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
