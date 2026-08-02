@@ -13,7 +13,7 @@ import secrets
 import yaml
 import requests
 from pathlib import Path
-from datetime import date as date_module
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
@@ -62,11 +62,17 @@ HEADERS = {
 
 # ── ヘルパー関数 ─────────────────────────────────────
 
+# レースの日付は常に日本時間で決まる。実行環境のローカル時刻（Renderでは UTC）を
+# 使うと、日本時間 0:00〜9:00 の間だけ前日の日付になってしまうため JST を明示する。
+JST = timezone(timedelta(hours=9))
+
+
 def _today() -> str:
-    return date_module.today().strftime("%Y%m%d")
+    return datetime.now(JST).strftime("%Y%m%d")
 
 
 def _resolve_date(d: str) -> str:
+    """"today" をここで YYYYMMDD に正規化する。以降は日付指定と同じ経路を通す。"""
     return _today() if d == "today" else d
 
 
@@ -322,15 +328,17 @@ def _fetch_racecard_from_boatrace_jp(venue: int, race_no: int, target_date: str)
     return race
 
 
-def _fetch_racecard_from_openapi(venue: int, race_no: int, target_date: str, date_arg: str) -> dict:
-    """副経路。主経路が失敗したときのみ使う。"""
-    # 日付別配信のURLは v2/{YYYY}/{YYYYMMDD}.json（年フォルダが必要）。
-    # 年フォルダを省いた v2/{YYYYMMDD}.json はどの日付でも必ず404になる。
-    url = (
-        "https://boatraceopenapi.github.io/programs/v2/today.json"
-        if date_arg == "today"
-        else f"https://boatraceopenapi.github.io/programs/v2/{target_date[:4]}/{target_date}.json"
-    )
+def _fetch_racecard_from_openapi(venue: int, race_no: int, target_date: str) -> dict:
+    """
+    副経路。主経路が失敗したときのみ使う。
+    日付別配信のURLは v2/{YYYY}/{YYYYMMDD}.json（年フォルダが必要）。
+    年フォルダを省いた v2/{YYYYMMDD}.json はどの日付でも必ず404になる。
+
+    today.json は使わない。配信が停止すると停止時点の中身を返し続けるため、
+    「当日を要求したのに前日が返る」という今回の不具合の発生源そのものだった。
+    日付指定なら、その日のファイルが無ければ404になり、古いデータを掴む余地がない。
+    """
+    url = f"https://boatraceopenapi.github.io/programs/v2/{target_date[:4]}/{target_date}.json"
     resp = requests.get(url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
     race = _find_race(resp.json().get("programs", []), venue, race_no)
@@ -405,7 +413,7 @@ def get_race_card(venue: int, race_no: int, date: str = "today") -> str:
     except Exception as e:
         errors.append(f"boatrace.jp: {e}")
         try:
-            race = _fetch_racecard_from_openapi(venue, race_no, target_date, date)
+            race = _fetch_racecard_from_openapi(venue, race_no, target_date)
             race["_fallback_reason"] = str(e)
         except Exception as e2:
             errors.append(f"BoatraceOpenAPI: {e2}")
