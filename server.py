@@ -341,6 +341,48 @@ def _fetch_racecard_from_openapi(venue: int, race_no: int, target_date: str, dat
     return race
 
 
+# v3配信データの grade_number と grade_label を突合して確認した対応
+# （2 は標本に出現しなかったため G1 と推定。表示ラベルのみに使用）
+GRADE_NUM_MAP = {1: "SG", 2: "G1", 3: "G2", 4: "G3", 5: "一般"}
+
+
+def _racecard_header(race: dict) -> list:
+    """
+    出走表ヘッダを組み立てる。
+    表示する会場・レース番号・日付は、すべて「取得したデータが名乗っている値」から取る。
+    引数から作らないのは、中身と表示がズレたときに表示が嘘をつかないようにするため。
+    """
+    stadium_no = race.get("race_stadium_number")
+    venue_label = race.get("race_stadium_name") or _venue_name(stadium_no) if stadium_no else "?"
+    if stadium_no:
+        venue_label = f"{venue_label}(場{stadium_no})"
+
+    no = race.get("race_number")
+    race_label = f"{no}R" if no is not None else "?R"
+
+    date_label = race.get("race_date") or race.get("race_date_label") or "日付不明"
+
+    grade = race.get("race_grade_label") or GRADE_NUM_MAP.get(race.get("race_grade_number"), "")
+    title = " ".join(x for x in [grade, race.get("race_title", "")] if x).strip()
+    subtitle = race.get("race_subtitle", "") or ""
+    distance = race.get("race_distance")
+
+    lines = [
+        "=" * 50,
+        f"  {venue_label}  {race_label}  出走表  [{date_label}]",
+        f"  {title}  {subtitle}".rstrip(),
+        f"  距離: {distance if distance is not None else '-'}m",
+    ]
+    if race.get("race_closed_at"):
+        lines.append(f"  締切予定: {race['race_closed_at']}")
+
+    lines.append(f"  [出典: {race.get('_source', '不明')}]")
+    if race.get("_fallback_reason"):
+        lines.append(f"  ※ 副経路に降格しました（主経路 boatrace.jp の失敗: {race['_fallback_reason']}）")
+    lines += ["=" * 50, ""]
+    return lines
+
+
 # ── Tool 1: 出走表 ────────────────────────────────────
 
 @mcp.tool()
@@ -362,6 +404,7 @@ def get_race_card(venue: int, race_no: int, date: str = "today") -> str:
         errors.append(f"boatrace.jp: {e}")
         try:
             race = _fetch_racecard_from_openapi(venue, race_no, target_date, date)
+            race["_fallback_reason"] = str(e)
         except Exception as e2:
             errors.append(f"BoatraceOpenAPI: {e2}")
 
@@ -371,14 +414,7 @@ def get_race_card(venue: int, race_no: int, date: str = "today") -> str:
             "いずれの取得経路も失敗しています。\n  - " + "\n  - ".join(errors)
         )
 
-    lines = [
-        "=" * 50,
-        f"  {_venue_name(venue)}競艇  {race_no}R  出走表  ({target_date})",
-        f"  {race.get('race_title', '')}  {race.get('race_subtitle', '')}",
-        f"  距離: {race.get('race_distance', '-')}m",
-        "=" * 50,
-        "",
-    ]
+    lines = _racecard_header(race)
 
     boats = race.get("boats", [])
     # boats はリスト形式
