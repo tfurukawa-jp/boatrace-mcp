@@ -324,10 +324,12 @@ def _fetch_racecard_from_boatrace_jp(venue: int, race_no: int, target_date: str)
 
 def _fetch_racecard_from_openapi(venue: int, race_no: int, target_date: str, date_arg: str) -> dict:
     """副経路。主経路が失敗したときのみ使う。"""
+    # 日付別配信のURLは v2/{YYYY}/{YYYYMMDD}.json（年フォルダが必要）。
+    # 年フォルダを省いた v2/{YYYYMMDD}.json はどの日付でも必ず404になる。
     url = (
         "https://boatraceopenapi.github.io/programs/v2/today.json"
         if date_arg == "today"
-        else f"https://boatraceopenapi.github.io/programs/v2/{target_date}.json"
+        else f"https://boatraceopenapi.github.io/programs/v2/{target_date[:4]}/{target_date}.json"
     )
     resp = requests.get(url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
