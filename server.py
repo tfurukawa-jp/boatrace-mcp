@@ -82,6 +82,217 @@ def _find_race(programs: list, venue: int, race_no: int) -> Optional[dict]:
     return None
 
 
+# ── 出走表の取得経路 ───────────────────────────────────
+# 主: boatrace.jp（公式・当日分が確実に存在する）
+# 副: BoatraceOpenAPI（配信停止時に古いデータを黙って返すため主にはしない）
+
+BOATRACE_JP_RACELIST_URL = "https://www.boatrace.jp/owpc/pc/race/racelist"
+
+CLASS_NUM = {v: k for k, v in CLASS_MAP.items()}  # "A1" -> 1
+
+_RE_PLACE_IMG = re.compile(r"text_place2_(\d+)\.png")
+_RE_GRADE_CLS = re.compile(r"is-(SG|G1|G2|G3)")
+_RE_BOAT_COLOR = re.compile(r"is-boatColor(\d)")
+_RE_DISTANCE = re.compile(r"(\d+)\s*m")
+_RE_AGE_WEIGHT = re.compile(r"(\d+)歳\s*/\s*([\d.]+)kg")
+_RE_FL_ST = re.compile(r"F(\d+)\s*L(\d+)\s*([\d.]+)")
+
+
+def _to_num(text: str, cast=float):
+    """'51.75' → 51.75 / '-' や空文字 → None（数値化できないものは黙って0にしない）"""
+    try:
+        return cast(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_racelist_page(html: str) -> dict:
+    """
+    boatrace.jp 出走表ページを BoatraceOpenAPI v2 と同じキー構造の dict に正規化する。
+    ページが自分自身について名乗っている値（会場・レース番号・日付）も併せて返し、
+    呼び出し側が要求値と突合できるようにする。
+    解析できない場合は ValueError を送出する（それらしい別データを返す経路を作らない）。
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # ── ページ自身が名乗る会場（画像ファイル名に場コードが埋まっている）
+    place_img = soup.select_one(".heading2_area img")
+    if place_img is None:
+        raise ValueError("会場情報が見つかりません（開催のない会場・日付の可能性）")
+    m = _RE_PLACE_IMG.search(place_img.get("src", ""))
+    if not m:
+        raise ValueError("会場コードを特定できません")
+    page_venue = int(m.group(1))
+    page_venue_name = place_img.get("alt", "").strip()
+
+    # ── ページ自身が名乗る日付（"8月2日 最終日"）
+    day_tab = soup.select_one(".is-active2")
+    page_date_label = day_tab.get_text(" ", strip=True) if day_tab else ""
+
+    # ── ページ自身が名乗るレース番号
+    # レース選択行のうち、色クラス（is-thColor2=終了済 / is-thColor3=未発走）が
+    # 付いていない唯一の <th> が表示中のレース。
+    # ※ is-activeColor1 は「次に締切が来るレース」であり表示中レースではないため使わない。
+    page_race_no = None
+    closed_at = None
+    for table in soup.find_all("table"):
+        head = table.find("tr")
+        if head is None:
+            continue
+        ths = head.find_all("th")
+        labels = [th.get_text(strip=True) for th in ths]
+        if not labels or labels[0] != "レース":
+            continue
+        for i, th in enumerate(ths[1:], start=1):
+            if th.get("class") is None:
+                page_race_no = _to_num(labels[i].rstrip("Rr"), int)
+                # 締切予定時刻の行は先頭セルが見出し（"締切予定時刻"）なので、
+                # ヘッダ行の th インデックス i と td インデックスがそのまま対応する。
+                time_row = table.find_all("tr")[1] if len(table.find_all("tr")) > 1 else None
+                if time_row:
+                    tds = time_row.find_all("td")
+                    if i < len(tds) and tds[0].get_text(strip=True) == "締切予定時刻":
+                        closed_at = tds[i].get_text(strip=True)
+                break
+        break
+
+    # ── 大会名・グレード・副題・距離
+    title_el = soup.select_one(".heading2_title")
+    race_title = title_el.get_text(strip=True) if title_el else ""
+    grade = "一般"
+    if title_el is not None:
+        gm = _RE_GRADE_CLS.search(" ".join(title_el.get("class") or []))
+        if gm:
+            grade = gm.group(1)
+
+    detail_el = soup.select_one(".title16_titleDetail__add2020")
+    detail = detail_el.get_text(" ", strip=True) if detail_el else ""
+    dm = _RE_DISTANCE.search(detail)
+    race_distance = int(dm.group(1)) if dm else None
+    race_subtitle = _RE_DISTANCE.sub("", detail).replace("　", " ").strip()
+
+    # ── 出走6艇
+    tables = soup.find_all("table")
+    if len(tables) < 2:
+        raise ValueError("出走表テーブルが見つかりません")
+
+    boats = []
+    for tbody in tables[1].find_all("tbody"):
+        head_row = tbody.find("tr")
+        if head_row is None:
+            continue
+        tds = head_row.find_all("td")
+        if len(tds) < 8:
+            continue
+
+        bm = _RE_BOAT_COLOR.search(" ".join(tds[0].get("class") or []))
+        if not bm:
+            continue
+        frame = int(bm.group(1))
+
+        # 選手情報セル: ['4980', '/', 'A1', '佐々木　完太', '山口/山口', '30歳/50.5kg']
+        info = [t.strip() for t in tds[2].get_text("\n", strip=True).split("\n") if t.strip()]
+        info = [t for t in info if t != "/"]
+        if len(info) < 5:
+            raise ValueError(f"{frame}号艇の選手情報を解析できません")
+
+        reg_no = _to_num(info[0], int)
+        cls_label = info[1]
+        name = info[2].replace("　", " ")
+        branch, _, birthplace = info[3].partition("/")
+        am = _RE_AGE_WEIGHT.search(info[4])
+        age = _to_num(am.group(1), int) if am else None
+        weight = _to_num(am.group(2), float) if am else None
+
+        fm = _RE_FL_ST.search(tds[3].get_text(" ", strip=True))
+        flying = _to_num(fm.group(1), int) if fm else None
+        late = _to_num(fm.group(2), int) if fm else None
+        avg_st = _to_num(fm.group(3), float) if fm else None
+
+        def cells(td):
+            return td.get_text(" ", strip=True).split()
+
+        national = cells(tds[4])
+        local = cells(tds[5])
+        motor = cells(tds[6])
+        boat = cells(tds[7])
+        for label, vals, need in (
+            ("全国成績", national, 3), ("当地成績", local, 3),
+            ("モーター", motor, 3), ("ボート", boat, 3),
+        ):
+            if len(vals) < need:
+                raise ValueError(f"{frame}号艇の{label}を解析できません")
+
+        boats.append({
+            "racer_boat_number": frame,
+            "racer_name": name,
+            "racer_number": reg_no,
+            "racer_class_number": CLASS_NUM.get(cls_label, 0),
+            "racer_branch": branch.strip(),
+            "racer_birthplace": birthplace.strip(),
+            "racer_age": age,
+            "racer_weight": weight,
+            "racer_flying_count": flying,
+            "racer_late_count": late,
+            "racer_average_start_timing": avg_st,
+            "racer_national_top_1_percent": _to_num(national[0]),
+            "racer_national_top_2_percent": _to_num(national[1]),
+            "racer_national_top_3_percent": _to_num(national[2]),
+            "racer_local_top_1_percent": _to_num(local[0]),
+            "racer_local_top_2_percent": _to_num(local[1]),
+            "racer_local_top_3_percent": _to_num(local[2]),
+            "racer_assigned_motor_number": _to_num(motor[0], int),
+            "racer_assigned_motor_top_2_percent": _to_num(motor[1]),
+            "racer_assigned_motor_top_3_percent": _to_num(motor[2]),
+            "racer_assigned_boat_number": _to_num(boat[0], int),
+            "racer_assigned_boat_top_2_percent": _to_num(boat[1]),
+            "racer_assigned_boat_top_3_percent": _to_num(boat[2]),
+        })
+
+    if not boats:
+        raise ValueError("出走選手を1名も取得できませんでした")
+
+    return {
+        "race_stadium_number": page_venue,
+        "race_stadium_name": page_venue_name,
+        "race_number": page_race_no,
+        "race_date_label": page_date_label,
+        "race_closed_at": closed_at,
+        "race_title": race_title,
+        "race_subtitle": race_subtitle,
+        "race_grade_label": grade,
+        "race_distance": race_distance,
+        "boats": boats,
+    }
+
+
+def _fetch_racecard_from_boatrace_jp(venue: int, race_no: int, target_date: str) -> dict:
+    """主経路。取得・解析に失敗したら例外を送出する。"""
+    url = f"{BOATRACE_JP_RACELIST_URL}?rno={race_no}&jcd={venue:02d}&hd={target_date}"
+    resp = requests.get(url, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
+    race = _parse_racelist_page(resp.text)
+    race["_source"] = f"boatrace.jp racelist (rno={race_no}&jcd={venue:02d}&hd={target_date})"
+    return race
+
+
+def _fetch_racecard_from_openapi(venue: int, race_no: int, target_date: str, date_arg: str) -> dict:
+    """副経路。主経路が失敗したときのみ使う。"""
+    url = (
+        "https://boatraceopenapi.github.io/programs/v2/today.json"
+        if date_arg == "today"
+        else f"https://boatraceopenapi.github.io/programs/v2/{target_date}.json"
+    )
+    resp = requests.get(url, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
+    race = _find_race(resp.json().get("programs", []), venue, race_no)
+    if race is None:
+        raise ValueError(f"{_venue_name(venue)} {race_no}R が配信データに含まれていません")
+    race = dict(race)
+    race["_source"] = f"BoatraceOpenAPI {url.split('/programs/')[1]}"
+    return race
+
+
 # ── Tool 1: 出走表 ────────────────────────────────────
 
 @mcp.tool()
@@ -94,28 +305,22 @@ def get_race_card(venue: int, race_no: int, date: str = "today") -> str:
     """
     target_date = _resolve_date(date)
 
-    url = (
-        "https://boatraceopenapi.github.io/programs/v2/today.json"
-        if date == "today"
-        else f"https://boatraceopenapi.github.io/programs/v2/{target_date}.json"
-    )
-
+    # 主経路: boatrace.jp（公式）。失敗したときだけ OpenAPI に降りる。
+    errors = []
+    race = None
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.RequestException as e:
-        return f"【エラー】BoatraceOpenAPIへの接続に失敗しました。\n詳細: {e}"
+        race = _fetch_racecard_from_boatrace_jp(venue, race_no, target_date)
     except Exception as e:
-        return f"【エラー】JSONの解析に失敗しました。\n詳細: {e}"
+        errors.append(f"boatrace.jp: {e}")
+        try:
+            race = _fetch_racecard_from_openapi(venue, race_no, target_date, date)
+        except Exception as e2:
+            errors.append(f"BoatraceOpenAPI: {e2}")
 
-    race = _find_race(data.get("programs", []), venue, race_no)
     if race is None:
         return (
-            f"【データなし】{_venue_name(venue)} {race_no}R の出走表が見つかりません。\n"
-            f"日付: {target_date} / 本日の開催会場: "
-            + ", ".join(str(p.get("race_stadium_number")) for p in
-                        {p["race_stadium_number"]: p for p in data.get("programs", [])}.values())
+            f"【データなし】{_venue_name(venue)} {race_no}R（{target_date}）の出走表を取得できませんでした。\n"
+            "いずれの取得経路も失敗しています。\n  - " + "\n  - ".join(errors)
         )
 
     lines = [
