@@ -941,7 +941,7 @@ def get_learning_rules(
     venue: 会場ID（指定すると会場別ルールも追加、例: 12）
     conditions: 条件キーワード（カンマ区切り可、例: "向風,安定板"）
     racer_ids: 選手登録番号（カンマ区切り可、例: "3997,4444"）
-    ※ 引数なしで呼ぶと全ジェネラルルール（R1〜R14）を返す。
+    ※ 引数なしで呼ぶと全ジェネラルルールを返す。
     """
     result_sections = []
 
@@ -973,7 +973,9 @@ def get_learning_rules(
             general = yaml.safe_load(f)
         rules = general.get("rules", [])
         if rules:
-            section = ["【ジェネラルルール（R1〜R15）】"]
+            # 見出しに番号範囲を書かない。欠番があるうえ、ルールを増減するたびに
+            # ここの追随が漏れて表示と中身が食い違うため。
+            section = [f"【ジェネラルルール（全{len(rules)}件）】"]
             for r in rules:
                 section.append(f"  {r['id']}: {r['text']}")
             result_sections.append("\n".join(section))
