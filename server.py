@@ -7,6 +7,7 @@ claude.aiモバイルアプリから呼び出し、レース分析に必要な�
 import os
 import re
 import math
+import unicodedata
 import json
 import time
 import secrets
@@ -126,6 +127,88 @@ def _to_num(text: str, cast=float):
         return None
 
 
+# ── 今節成績（racelist ページ右側の 4行×14列の格子）───────────────
+#
+# thead の3行目が日付グループ（初日 / ２日目 / … / 最終日 / 予備）で、1グループ2列。
+# つまり「1日あたり最大2走」ぶんの枠が、開催日数ぶん横に並ぶ。
+# 各艇は tbody 1つ＝4行で構成され、行の意味は thead の見出し
+# 「レースNo（艇番色） 進入コース STタイミング 成績」にそのまま対応する。
+#
+#   行1: レースNo。セルの class is-boatColor{N} の N は【艇番】であって着順ではない
+#   行2: 進入コース（艇番と一致しないことがある。前づけ等で入れ替わるため）
+#   行3: STタイミング
+#   行4: 成績（着順）。数値とは限らず F/L/転/落/妨/エ 等の非数値が入る
+#
+# ※ 行1の色を着順と読むと、書式が正しいまま中身だけが違う出力になる。
+#   実際に旧実装はこれを着順と誤読しており、5号艇の「艇番2・進入コース3」の走で
+#   艇番が消えて進入コースが枠として表示されていた。
+# ※ 当日より前の実績のみが入る（当日欄は発走前のため空）。
+# ※ 出走の無い日はセルが空になるだけで、行や列は消えない。
+
+_PLACED_WITHIN = 3  # 「3着以内」の境界
+
+
+def _series_day_labels(table) -> list:
+    """thead 3行目から日付グループのラベル（初日/２日目/…）を取り出す"""
+    thead = table.find("thead")
+    if thead is None:
+        return []
+    head_rows = thead.select("tr")
+    if len(head_rows) < 3:
+        return []
+    return [th.get_text(strip=True) for th in head_rows[2].find_all("th")]
+
+
+def _parse_series_results(tbody, day_labels: list) -> list:
+    """
+    1艇ぶんの今節成績を解析する。get_race_card と get_recent_10_races の共通経路。
+    出走の無い枠は読み飛ばし、実際に走った分だけを時系列で返す。
+    """
+    rows = tbody.select("tr")
+    if len(rows) < 4:
+        return []
+
+    # 行0は左半分（選手情報）に rowspan 付きセルが並ぶ。今節成績の列は rowspan を持たない。
+    race_cells = [td for td in rows[0].find_all("td") if not td.get("rowspan")]
+    course_cells = rows[1].find_all("td")
+    st_cells = rows[2].find_all("td")
+    result_cells = rows[3].find_all("td")
+
+    n_cols = min(
+        len(day_labels) * 2 or len(race_cells),
+        len(race_cells), len(course_cells), len(st_cells), len(result_cells),
+    )
+
+    entries = []
+    for i in range(n_cols):
+        race_txt = race_cells[i].get_text(strip=True)
+        result_txt = unicodedata.normalize("NFKC", result_cells[i].get_text(strip=True)).strip()
+        if not race_txt and not result_txt:
+            continue  # その日は出走なし
+
+        bm = _RE_BOAT_COLOR.search(" ".join(race_cells[i].get("class") or []))
+        entries.append({
+            "day": (day_labels[i // 2] if i // 2 < len(day_labels) else "") or "-",
+            "race_no": _to_num(race_txt, int),
+            "frame": int(bm.group(1)) if bm else None,        # 艇番（レースNoセルの色）
+            "course": _to_num(course_cells[i].get_text(strip=True), int),
+            "st": st_cells[i].get_text(strip=True) or None,
+            "result": result_txt or None,                     # 生の表記（"1" / "転" など）
+            "finish": _to_num(result_txt, int),               # 数値化できた場合のみ着順
+        })
+    return entries
+
+
+def _series_summary(series: list) -> dict:
+    """今節成績から出走数と3着以内回数を数える。着順が数値でない走は3着以内に数えない。"""
+    starts = len(series)
+    placed = sum(
+        1 for e in series
+        if e["finish"] is not None and 1 <= e["finish"] <= _PLACED_WITHIN
+    )
+    return {"starts": starts, "placed": placed}
+
+
 def _parse_racelist_page(html: str) -> dict:
     """
     boatrace.jp 出走表ページを BoatraceOpenAPI v2 と同じキー構造の dict に正規化する。
@@ -195,6 +278,8 @@ def _parse_racelist_page(html: str) -> dict:
     tables = soup.find_all("table")
     if len(tables) < 2:
         raise ValueError("出走表テーブルが見つかりません")
+
+    day_labels = _series_day_labels(tables[1])
 
     boats = []
     for tbody in tables[1].find_all("tbody"):
@@ -267,6 +352,7 @@ def _parse_racelist_page(html: str) -> dict:
             "racer_assigned_boat_number": _to_num(boat[0], int),
             "racer_assigned_boat_top_2_percent": _to_num(boat[1]),
             "racer_assigned_boat_top_3_percent": _to_num(boat[2]),
+            "series": _parse_series_results(tbody, day_labels),
         })
 
     if not boats:
@@ -810,120 +896,57 @@ def get_racer_course_stats(racer_id: str) -> str:
 @mcp.tool()
 def get_recent_10_races(venue: int, race_no: int, date: str = "today") -> str:
     """
-    出走選手の枠番別・今節過去成績（着順・枠・ST・進入コース）を取得する。
+    出走選手の今節成績（日ごとの着順・艇番・進入コース・ST）を取得する。
     venue: 会場ID（1〜24）
     race_no: レース番号（1〜12）
     date: 日付（"today" または "YYYYMMDD"）
+    ※ get_race_card と同じページ・同じパーサを通るため、両者の内容は必ず一致する。
     """
     target_date = _resolve_date(date)
-    url = (
-        f"https://www.boatrace.jp/owpc/pc/race/racelist"
-        f"?rno={race_no}&jcd={venue:02d}&hd={target_date}"
-    )
 
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
+        race = _fetch_racecard_from_boatrace_jp(venue, race_no, target_date)
     except Exception as e:
-        return f"【エラー】boatrace.jpへの接続に失敗しました。\n詳細: {e}"
+        return (
+            f"【エラー】{_venue_name(venue)} {race_no}R（{target_date}）の"
+            f"今節成績を取得できませんでした。\n詳細: {e}"
+        )
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-
+    stadium_no = race.get("race_stadium_number")
+    venue_label = race.get("race_stadium_name") or _venue_name(stadium_no)
     lines = [
         "=" * 50,
-        f"  {_venue_name(venue)}競艇  {race_no}R  今節過去成績",
+        f"  {venue_label}(場{stadium_no})  {race.get('race_number')}R  今節成績"
+        f"  [{race.get('race_date_label', '日付不明')}]",
+        f"  [出典: {race.get('_source', '不明')}]",
         "=" * 50,
         "",
-        "  着順の色 = is-boatColor{N}: N=着順 / セル内テキスト=レース番号",
+        "  表記: 日R番号:着順(艇番/進入コース/ST)",
         "",
     ]
 
-    tables = soup.find_all("table")
-    if len(tables) < 2:
-        lines.append("データが見つかりませんでした。")
-        return "\n".join(lines)
+    for boat in race.get("boats", []):
+        frame = boat.get("racer_boat_number", "?")
+        name = boat.get("racer_name", "-")
+        series = boat.get("series", [])
 
-    table2 = tables[1]
-    all_rows = table2.find_all("tr")
+        if not series:
+            lines += [f"  {frame}号艇 {name}:  （今節初走）", ""]
+            continue
 
-    # 主行（is-fs14クラスを持つtd = 今日の枠番を表すtd）のインデックスを収集
-    main_row_indices = [
-        i for i, row in enumerate(all_rows)
-        if row.find("td", class_=re.compile(r'is-boatColor\d.*is-fs14|is-fs14.*is-boatColor\d'))
-    ]
-
-    for idx in main_row_indices:
-        main_row = all_rows[idx]
-        tds = main_row.find_all("td")
-
-        # 今日の枠番
-        frame_td = main_row.find("td", class_=re.compile(r'is-boatColor\d.*is-fs14|is-fs14.*is-boatColor\d'))
-        today_frame = frame_td.get_text(strip=True) if frame_td else "?"
-
-        # 選手名（プロフィールリンクのうちテキストが入っているものを探す）
-        name = "-"
-        for td in tds:
-            for a in td.find_all("a"):
-                if "racersearch/profile" in a.get("href", ""):
-                    text = a.get_text(strip=True).replace("　", " ").strip()
-                    if text:  # 写真リンク（テキスト空）はスキップ
-                        name = text
-                        break
-            if name != "-":
-                break
-
-        # 過去レース結果セルを抽出
-        # CLASS is-boatColor{N}（is-fs14なし）のtd → N=着順、テキスト=レース番号
-        result_cells = [
-            td for td in tds
-            if re.search(r'is-boatColor\d', " ".join(td.get("class", [])))
-            and "is-fs14" not in " ".join(td.get("class", []))
-        ]
-
-        # サブ行から枠番・ST・進入コースを取得（最大4行後まで）
-        sub_frame_row = all_rows[idx + 1] if idx + 1 < len(all_rows) else None
-        sub_st_row    = all_rows[idx + 2] if idx + 2 < len(all_rows) else None
-        sub_course_row = all_rows[idx + 3] if idx + 3 < len(all_rows) else None
-
-        def get_sub_values(row):
-            if row is None:
-                return []
-            return [td.get_text(strip=True) for td in row.find_all("td") if td.get_text(strip=True)]
-
-        sub_frames  = get_sub_values(sub_frame_row)
-        sub_sts     = get_sub_values(sub_st_row)
-        sub_courses = get_sub_values(sub_course_row)
-
-        # 結果を整形して表示
-        results_str_parts = []
-        for i, td in enumerate(result_cells):
-            classes = " ".join(td.get("class", []))
-            m = re.search(r'is-boatColor(\d)', classes)
-            finish  = m.group(1) if m else "?"
-            race_no_str = td.get_text(strip=True)
-            frame   = sub_frames[i]  if i < len(sub_frames)  else "-"
-            st      = sub_sts[i]     if i < len(sub_sts)     else "-"
-            course  = sub_courses[i] if i < len(sub_courses) else "-"
-
-            results_str_parts.append(
-                f"R{race_no_str}:{finish}着(枠{frame}/C{course}/ST{st})"
+        parts = []
+        for e in series:
+            # 着順が数値でない走（F/L/転/落/妨/エ 等）は生の表記のまま出す
+            res = f"{e['finish']}着" if e["finish"] is not None else (e["result"] or "?")
+            parts.append(
+                f"{e['day']}R{e['race_no']}:{res}"
+                f"(艇{e['frame'] or '-'}/進入{e['course'] or '-'}/ST{e['st'] or '-'})"
             )
 
-        # 次の予定レース
-        next_race_td = next(
-            (td for td in tds
-             if not td.get("class") and re.match(r'^\d+R$', td.get_text(strip=True))),
-            None
-        )
-        next_race = next_race_td.get_text(strip=True) if next_race_td else "-"
-
-        result_line = "  ".join(results_str_parts) if results_str_parts else "（今節初走）"
-        lines.append(f"  {today_frame}号艇 {name}:  {result_line}")
-        lines.append(f"           次走: {next_race}")
+        s = _series_summary(series)
+        lines.append(f"  {frame}号艇 {name}:  " + "  ".join(parts))
+        lines.append(f"           今節 {s['starts']}走 / 3着以内 {s['placed']}回")
         lines.append("")
-
-    if len(lines) <= 6:
-        lines.append("データが見つかりませんでした。")
 
     return "\n".join(lines)
 
