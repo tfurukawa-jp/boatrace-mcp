@@ -199,6 +199,25 @@ def _parse_series_results(tbody, day_labels: list) -> list:
     return entries
 
 
+def _series_lines(series: list, indent: str = "  ") -> list:
+    """今節成績を2行（要約＋各走）に整形する。get_race_card / get_recent_10_races 共通。"""
+    if not series:
+        return [f"{indent}今節: 出走なし（初日）"]
+
+    s = _series_summary(series)
+    parts = []
+    for e in series:
+        # 着順が数値でない走（転・エ 等）は生の表記のまま出す。
+        # 数値に丸めると事故と着順の区別がつかなくなるため。
+        res = f"{e['finish']}着" if e["finish"] is not None else (e["result"] or "?")
+        parts.append(f"{e['day']}R{e['race_no']}:{res}(進入{e['course'] or '-'}/ST{e['st'] or '-'})")
+
+    return [
+        f"{indent}今節: {s['starts']}走 / 3着以内 {s['placed']}回",
+        f"{indent}  " + "  ".join(parts),
+    ]
+
+
 def _series_summary(series: list) -> dict:
     """今節成績から出走数と3着以内回数を数える。着順が数値でない走は3着以内に数えない。"""
     starts = len(series)
@@ -558,8 +577,9 @@ def get_race_card(venue: int, race_no: int, date: str = "today") -> str:
             f"  平均ST: {avg_st}",
             f"  モーター#{motor_no}: 2連{motor_2}% / 3連{motor_3}%",
             f"  ボート  #{boat_no}: 2連{boat_2}% / 3連{boat_3}%",
-            "",
         ]
+        lines += _series_lines(boat.get("series", []))
+        lines.append("")
 
     return "\n".join(lines)
 
