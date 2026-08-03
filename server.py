@@ -199,6 +199,49 @@ def _parse_series_results(tbody, day_labels: list) -> list:
     return entries
 
 
+_TREND_MIN_STARTS = 3  # これ未満の出走数では判定の信頼度を「低」とする
+
+
+def _series_trend(series: list) -> dict:
+    """
+    今節成績から調子の傾向を判定する。
+
+    判定: 3着以内が「半数以上」なら上向き、半数未満なら下降。
+      ちょうど半数（6走3回など）は「以上」に含めるため上向き。
+      浮動小数の丸め誤差を避けるため placed * 2 >= starts で比較する。
+    出走が無い場合（初日）のみ判定不能とする。
+    出走2走以下でも判定は出すが、信頼度を「低」として併記する
+      （1走100%と7走57%を同じ重みで扱わせないため）。
+    着順が数値でない走（転・エ・F 等）は出走には数えるが3着以内には数えない。
+    """
+    s = _series_summary(series)
+    starts, placed = s["starts"], s["placed"]
+
+    if starts == 0:
+        return {
+            "trend": "判定不能",
+            "starts": 0,
+            "placed": 0,
+            "rate": None,
+            "confidence": "なし",
+            "basis": "今節の出走がない（初日）ため判定できない。展示情報を重視した判断に切り替える",
+        }
+
+    trend = "上向き" if placed * 2 >= starts else "下降"
+    low = starts < _TREND_MIN_STARTS
+    return {
+        "trend": trend,
+        "starts": starts,
+        "placed": placed,
+        "rate": round(placed / starts * 100, 1),
+        "confidence": "低" if low else "通常",
+        "basis": (
+            f"今節{starts}走中3着以内{placed}回（{placed / starts * 100:.1f}%）"
+            + ("。出走数が少なく判定の信頼度は低い" if low else "")
+        ),
+    }
+
+
 def _series_lines(series: list, indent: str = "  ") -> list:
     """今節成績を2行（要約＋各走）に整形する。get_race_card / get_recent_10_races 共通。"""
     if not series:
@@ -1170,6 +1213,66 @@ def calc_trigami_threshold(odds: float, total_budget: int) -> str:
 
 
 # ── 穴予想エンジン: 展示スコア計算 ───────────────────────
+
+@mcp.tool()
+def calc_series_trend(venue: int, race_no: int, date: str = "today") -> str:
+    """
+    出走6艇の今節成績から「上向き / 下降 / 判定不能」を判定する（R17）。
+    venue: 会場ID（1〜24）
+    race_no: レース番号（1〜12）
+    date: 日付（"today" または "YYYYMMDD"）
+
+    判定基準:
+      3着以内が半数以上 → 上向き / 半数未満 → 下降 / 今節出走なし → 判定不能
+      ちょうど半数（6走3回など）は「半数以上」に含めるため上向き
+      出走2走以下でも判定は出すが confidence を "低" として返す
+      進入コースは判定に使わない（コースを問わず全体の着順で見る）
+
+    戻り値: JSON文字列
+      {"venue","race_no","date","source",
+       "boats":[{"boat_no","name","trend","starts","placed","rate","confidence","basis",
+                 "by_course":{"1":{"starts","placed"}, ...}}]}
+      by_course は参考情報。判定には使わない。
+    """
+    target_date = _resolve_date(date)
+
+    try:
+        race = _fetch_racecard_from_boatrace_jp(venue, race_no, target_date)
+    except Exception as e:
+        return json.dumps(
+            {"error": f"今節成績を取得できませんでした: {e}"}, ensure_ascii=False
+        )
+
+    boats = []
+    for b in race.get("boats", []):
+        series = b.get("series", [])
+        t = _series_trend(series)
+
+        # 参考情報: 進入コース別の内訳（判定には使わない）
+        by_course: dict = {}
+        for e in series:
+            key = str(e["course"]) if e["course"] else "-"
+            slot = by_course.setdefault(key, {"starts": 0, "placed": 0})
+            slot["starts"] += 1
+            if e["finish"] is not None and 1 <= e["finish"] <= _PLACED_WITHIN:
+                slot["placed"] += 1
+
+        boats.append({
+            "boat_no": b.get("racer_boat_number"),
+            "name": b.get("racer_name"),
+            **t,
+            "by_course": dict(sorted(by_course.items())),
+        })
+
+    return json.dumps({
+        "venue": race.get("race_stadium_number"),
+        "venue_name": race.get("race_stadium_name"),
+        "race_no": race.get("race_number"),
+        "date": race.get("race_date_label"),
+        "source": race.get("_source"),
+        "boats": boats,
+    }, ensure_ascii=False, indent=2)
+
 
 @mcp.tool()
 def calc_exhibition_score(racers_data: str) -> str:
